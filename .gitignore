@@ -4,9 +4,15 @@
 *.dll
 *.so
 *.dylib
+# The default program name when running `go build` on systems with no extension.
+kq-live
 
 # Test binary, build with `go test -c`
 *.test
 
 # Output of the go coverage tool, specifically when used with LiteIDE
 *.out
+
+# Output files created by kq-live.
+out.csv
+out.log
