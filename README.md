@@ -39,10 +39,10 @@ use the cab's IP address instead of the host name.
 - Reads events from the killer queen cabinet. All messages are output into a
   file named `out.log`
 
-      Note: If you don't specify the cabinet URL on the command line, the tool
-      currently tries to read a log file from a hard-coded path. If libkq is
-      placed alongside the tool, this will probably work, but please don't rely
-      on it.
+  Note: If you don't specify the cabinet URL on the command line, the tool
+  currently tries to read a log file from a hard-coded path. If libkq is
+  placed alongside the tool, this will probably work, but please don't rely
+  on it.
 
 - Tracks the state of the current game. Much of the state is output into a file
   named `out.csv`, with a row for every state change.
