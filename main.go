@@ -861,7 +861,7 @@ func main() {
 		strReader = &teeReader{autoconn, kqio.NewMessageStringWriter(replayLog)}
 		closer = func() { fmt.Fprintln(logOut, "Disconnecting"); autoconn.Close() }
 	} else {
-		f, e := os.Open("libkq/examples/BB3/red.logs-1540028543.54784.log")
+		f, e := os.Open("../libkq/examples/BB3/red.logs-1540028543.54784.log")
 		if e != nil { panic(e) }
 		strReader = kqio.NewMessageStringReader(f)
 	}
