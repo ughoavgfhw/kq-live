@@ -16,3 +16,6 @@ kq-live
 # Output files created by kq-live.
 out.csv
 out.log
+
+# Generated go files.
+*.gen.go

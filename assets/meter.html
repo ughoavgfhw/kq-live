@@ -1,0 +1,49 @@
+<!doctype html>
+<html>
+<head>
+	<script>
+		function setPath(score, pointer) {
+			var radius = 40;
+			var radians = (1 - score) * Math.PI;
+			var x = radius * Math.cos(radians);
+			var y = radius * Math.sin(radians);
+
+			var tan = Math.tan(radians);
+			var y1 = 2 / Math.sqrt(1 + tan*tan), x1 = y1 * -tan;
+			if (score == 0 || score == 1) { x1 = 0; y1 = 2; }
+			if (score == 0.5) { x1 = 2; y1 = 0; }
+			var path = ['M', 50 + x1, 50 - y1,
+						'L', 50 - x1, 50 + y1,
+						'L', 50 + x, 50 - y, 'Z'].join(' ');
+			pointer.setAttributeNS(null, 'd', path);
+		}
+
+		window.addEventListener('load', function() {
+			var which = 0;
+			try { which = parseInt(location.hash.substr(1), 10); } catch {}
+			if (isNaN(which)) which = 0;
+			var pointer = document.getElementById('pointer');
+			setPath(0.5, pointer);
+			var ws = new WebSocket('ws://' + location.host + '/ws');
+			ws.addEventListener('message', function(e) {
+				var data = e.data.split(',');
+				var command = data[0];
+				if (command == 'reset') {
+					setPath(0.5, pointer);
+				} else {
+					setPath(data[3 + which], pointer);
+				}
+			});
+		});
+	</script>
+</head>
+<body>
+	<svg xmlns="http://www.w3.org/2000/svg" width="100" height="51">
+		<path d="M 50 0 A 50 50 0 0 0 0 50 L 50 50 Z"
+			  fill="rgb(50, 180, 255)" />
+		<path d="M 100 50 A 50 50 0 0 0 50 0 L 50 50 Z"
+			  fill="rgb(255, 180, 0)" />
+		<path id="pointer" fill="rgb(133, 0, 0)" />
+	</svg>
+</body>
+</html>

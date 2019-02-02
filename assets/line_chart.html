@@ -1,0 +1,54 @@
+<!doctype html>
+<html>
+<head>
+	<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+	<script>
+		window.addEventListener('load', function() {
+			var multi = location.hash == '#multi';
+			var timeline = document.getElementById('timeline');
+			var multi_timeline = [timeline];
+			if (multi) {
+				for (var i = 0; i < 6; ++i) {
+					var next = document.createElement('div');
+					timeline.parentElement.insertBefore(next, timeline);
+					multi_timeline.unshift(next);
+					timeline = next;
+				}
+			}
+			var layout = {yaxis: {range: [0, 1], nticks: 3}};
+			for (var i = 0; i < multi_timeline.length; ++i) {
+				Plotly.newPlot(multi_timeline[i], [{ x: [], y: [], text: [] }], layout);
+			}
+			var ws = new WebSocket('ws://' + location.host + '/ws');
+			ws.addEventListener('message', function(e) {
+				var data = e.data.split(',');
+				var command = data[0];
+				var time = data[1];
+				if (command == 'reset') {
+					if (multi) {
+						var next = multi_timeline.pop();
+						multi_timeline.unshift(next);
+						timeline.parentElement.removeChild(next);
+						timeline.parentElement.insertBefore(next, timeline);
+						timeline = next;
+					}
+					data[2] = parseInt(data[2], 10) || 1;
+					var traces = [];
+					for (var i = 0; i < data[2]; ++i) {
+						traces.push({ x: [time], y: [0.5], text: [''] });
+					}
+					Plotly.react(timeline, traces, layout);
+				} else {
+					for (var i = 3; i < data.length; ++i) {
+						Plotly.extendTraces(timeline,
+											{x: [[time]], y: [[data[i]]], text: [[data[2]]]}, [i-3]);
+					}
+				}
+			});
+		});
+	</script>
+</head>
+<body>
+	<div id="timeline"></div>
+</body>
+</html>
