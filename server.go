@@ -37,6 +37,7 @@ func startWebServer(dataSource <-chan interface{}) {
 	reg := make(chan *chan<- interface{}, 1)
 	unreg := make(chan *chan<- interface{})
 	go runRegistry(dataSource, reg, unreg)
+	http.Handle("/static/", http.FileServer(assets.FS))
 	http.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
 		var content http.File
 		var err error
