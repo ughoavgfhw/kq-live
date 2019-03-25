@@ -851,6 +851,8 @@ type playerStat struct {
 	Deaths, WarriorDeaths, DroneDeaths, SnailDeaths, EatDeaths int
 	EatRescues, EatRescued int
 
+	LockoutGateKills, LockoutGateBumps int
+
 	// 100+ms after bump to get knocked from gate (bump is first). 500ms? of stun. 50ms after leaving gate for kill but sometimes 0. 50+ms after off snail for kill rarely over 50, <2 for escape
 	lastBumped, lastOnSnail, lastOffSnail, lastLeaveWarriorGate, warriorStart, lastLockoutEvent time.Time
 	lastBumper PlayerId
@@ -861,9 +863,28 @@ type playerStat struct {
 var lastSnailEscape time.Time
 var playerStats [NumPlayers]playerStat
 
-func updateStats(msg *kqio.Message, state *kq.GameState) {
+func isLockout(side Side, state *kq.GameState) bool {
+	switch side {
+	case BlueSide:
+		return state.Players[BlueStripes.Index()].Type != Warrior && state.Players[BlueAbs.Index()].Type != Warrior && state.Players[BlueSkulls.Index()].Type != Warrior && state.Players[BlueChecks.Index()].Type != Warrior
+	case GoldSide:
+		return state.Players[GoldStripes.Index()].Type != Warrior && state.Players[GoldAbs.Index()].Type != Warrior && state.Players[GoldSkulls.Index()].Type != Warrior && state.Players[GoldChecks.Index()].Type != Warrior
+	}
+	return false
+}
+
+type valentineEvent struct {
+	Awardee string `json:"awardee"`
+	Event string `json:"event"`
+}
+var winningKiller, lastBerryRunnerBlue, lastBerryRunnerGold PlayerId
+
+func updateStats(msg *kqio.Message, state *kq.GameState) (hearts []valentineEvent) {
 	if msg.Type == "gamestart" {
 		playerStats = [NumPlayers]playerStat{}
+winningKiller = 0
+lastBerryRunnerBlue = 0
+lastBerryRunnerGold = 0
 	}
 	if !state.InGame() && msg.Type != "victory" { return }
 	switch msg.Type {
@@ -879,9 +900,27 @@ func updateStats(msg *kqio.Message, state *kq.GameState) {
 		p2.bumperType = state.Players[val.Player1.Index()].Type
 		if p1.inWarriorGate {
 			p2.WarriorGateBumpOuts++
+			if isLockout(val.Player1.Team(), state) && msg.Time.Sub(state.Start) > 10*time.Second &&
+				(p2.lastLockoutEvent.IsZero() || msg.Time.Add(-time.Second).After(p2.lastLockoutEvent)) {
+				p2.LockoutGateBumps++
+				p2.lastLockoutEvent = msg.Time
+				hearts = append(hearts, valentineEvent{
+					Awardee: val.Player2.String(),
+					Event: "bump " + val.Player1.String() + " out of gate during lockout",
+				})
+			}
 		}
 		if p2.inWarriorGate {
 			p1.WarriorGateBumpOuts++
+			if isLockout(val.Player2.Team(), state) && msg.Time.Sub(state.Start) > 10*time.Second &&
+				(p1.lastLockoutEvent.IsZero() || msg.Time.Add(-time.Second).After(p1.lastLockoutEvent)) {
+				p1.LockoutGateBumps++
+				p1.lastLockoutEvent = msg.Time
+				hearts = append(hearts, valentineEvent{
+					Awardee: val.Player1.String(),
+					Event: "bump " + val.Player2.String() + " out of gate during lockout",
+				})
+			}
 		}
 	case "reserveMaiden":
 		val := msg.Val.(parser.EnterGateMessage)
@@ -962,6 +1001,15 @@ func updateStats(msg *kqio.Message, state *kq.GameState) {
 				}
 			} else if !v.lastLeaveWarriorGate.IsZero() && msg.Time.Add(-60*time.Millisecond).Before(v.lastLeaveWarriorGate) {
 				k.InGateKills++
+				if isLockout(val.Victim.Team(), state) && msg.Time.Sub(state.Start) > 10*time.Second &&
+					(k.lastLockoutEvent.IsZero() || msg.Time.Add(-time.Second).After(k.lastLockoutEvent)) {
+					k.LockoutGateKills++
+					k.lastLockoutEvent = msg.Time
+					hearts = append(hearts, valentineEvent{
+						Awardee: val.Killer.String(),
+						Event: "kill " + val.Victim.String() + " in gate during lockout",
+					})
+				}
 			}
 		}
 		if !v.lastBumped.IsZero() && msg.Time.Add(-time.Second).Before(v.lastBumped) {
@@ -969,6 +1017,12 @@ func updateStats(msg *kqio.Message, state *kq.GameState) {
 			b.Assists++
 			if v.bumperType == Drone {
 				b.DroneAssists++
+				if val.VictimType == Queen {
+					hearts = append(hearts, valentineEvent{
+						Awardee: v.lastBumper.String(),
+						Event: "bump " + val.Victim.String() + " to their death",
+					})
+				}
 			}
 		}
 	case "victory":
@@ -1008,10 +1062,163 @@ func updateStats(msg *kqio.Message, state *kq.GameState) {
 					} else {
 						p.SnailDist += endPos - p.snailStartPos
 					}
+					if p.lastOffSnail.IsZero() {
+						hearts = append(hearts, valentineEvent{
+							Awardee: PlayerId(i + 1).String(),
+							Event: "rode snail all the way without getting off (check to see if teammates helped)",
+						})
+					}
 				}
 			}
 		}
 	}
+
+	// Look for valentine events. Lockout events handled above, as well as drone assists
+	switch msg.Type {
+	case "berryDeposit":
+		p := msg.Val.(parser.DepositBerryMessage).Player
+		s := &playerStats[p.Index()]
+		if s.BerriesRun + s.BerriesKicked == 6 {
+			hearts = append(hearts, valentineEvent{
+				Awardee: p.String(),
+				Event: "collect six berries",
+			})
+		}
+		switch p.Team() {
+		case BlueSide: if state.BlueTeam.BerriesIn == 11 { lastBerryRunnerBlue = p }
+		case GoldSide: if state.GoldTeam.BerriesIn == 11 { lastBerryRunnerGold = p }
+		}
+	case "berryKickIn":
+		val := msg.Val.(parser.KickInBerryMessage)
+		p := val.Player
+		bluePlayer := val.Player.Team() == BlueSide
+		blueHive := val.Pos.X < mapCenter
+		if p == BlueQueen || p == GoldQueen {
+			hearts = append(hearts, valentineEvent{
+				Awardee: p.String(),
+				Event: "berry kick in by queen",
+			})
+		}
+		if blueHive {
+			if state.BlueTeam.BerriesIn == 11 {
+				lastBerryRunnerBlue = p
+				hearts = append(hearts, valentineEvent{
+					Awardee: p.String(),
+					Event: "kick the last berry into either hive",
+				})
+			}
+		} else {
+			if state.GoldTeam.BerriesIn == 11 { lastBerryRunnerGold = p }
+		}
+		s := &playerStats[p.Index()]
+		if s.BerriesKicked + s.BerriesKickedOpp == 2 {
+			hearts = append(hearts, valentineEvent{
+				Awardee: p.String(),
+				Event: "kick three berries into either hive",
+			})
+		}
+		if bluePlayer != blueHive {
+			hearts = append(hearts, valentineEvent{
+				Awardee: p.String(),
+				Event: "kick in to opponent hive",
+			})
+			break
+		}
+		if s.BerriesRun + s.BerriesKicked == 6 {
+			hearts = append(hearts, valentineEvent{
+				Awardee: p.String(),
+				Event: "collect six berries",
+			})
+		}
+	case "playerKill":
+		val := msg.Val.(parser.PlayerKillMessage)
+		if val.VictimType == Queen {
+			final := false
+			switch val.Victim.Team() {
+			case BlueSide:
+				final = state.BlueTeam.QueenDeaths == 2
+			case GoldSide:
+				final = state.GoldTeam.QueenDeaths == 2
+			}
+			if final {
+				winningKiller = val.Killer
+			}
+		}
+	case "victory":
+		val := msg.Val.(parser.GameResultMessage)
+		nokills := func(p PlayerId) bool {
+			return playerStats[p.Index()].Kills == playerStats[p.Index()].EatKills
+		}
+		rodesnail := func(p PlayerId) bool {
+			return playerStats[p.Index()].SnailDist > 0
+		}
+		allblueworkers := func(pred func(PlayerId) bool) bool {
+			return pred(BlueStripes) && pred(BlueAbs) && pred(BlueSkulls) && pred(BlueChecks)
+		}
+		allgoldworkers := func(pred func(PlayerId) bool) bool {
+			return pred(GoldStripes) && pred(GoldAbs) && pred(GoldSkulls) && pred(GoldChecks)
+		}
+		var allworkers func(func(PlayerId) bool) bool
+		switch val.Winner {
+		case BlueSide: allworkers = allblueworkers
+		case GoldSide: allworkers = allgoldworkers
+		}
+		if allworkers(nokills) {
+			hearts = append(hearts, valentineEvent{
+				Awardee: val.Winner.String(),
+				Event: "win without any warriors by " + val.EndCondition.String(),
+			})
+		}
+		if val.EndCondition == SnailWin && allworkers(rodesnail) {
+			hearts = append(hearts, valentineEvent{
+				Awardee: val.Winner.String(),
+				Event: "snail victory where all workers rode the snail",
+			})
+		}
+		if val.EndCondition == MilitaryWin && winningKiller != 0 && winningKiller.Team() == val.Winner {
+			hearts = append(hearts, valentineEvent{
+				Awardee: winningKiller.String(),
+				Event: "got the third kill in a military victory",
+			})
+		}
+		if val.EndCondition == EconomicWin {
+			var runner PlayerId
+			if state.Map == DayMap {
+				hearts = append(hearts, valentineEvent{
+					Awardee: val.Winner.String(),
+					Event: "win by day berries",
+				})
+			}
+			switch val.Winner {
+			case BlueSide: runner = lastBerryRunnerBlue
+			case GoldSide: runner = lastBerryRunnerGold
+			}
+			if runner != 0 {
+				if runner.Team() == val.Winner {
+					hearts = append(hearts, valentineEvent{
+						Awardee: runner.String(),
+						Event: "collected the final berry in an economic win",
+					})
+				} else {
+					hearts = append(hearts, valentineEvent{
+						Awardee: runner.String(),
+						Event: "kicked the final berry for the opponent's economic win",
+					})
+				}
+			}
+		}
+		if val.EndCondition == SnailWin {
+			for i := range state.Players {
+				if state.Players[i].IsOnSnail() {
+					hearts = append(hearts, valentineEvent{
+						Awardee: PlayerId(i + 1).String(),
+						Event: "finished on the snail for a snail victory",
+					})
+				}
+			}
+		}
+	}
+	return
 }
 
 func main() {
@@ -1064,6 +1271,8 @@ func main() {
 			continue
 		}
 		fmt.Fprintln(msgDump, msg)
+		valentineEvents := updateStats(&msg, state)
+//if valentineEvents != nil { fmt.Fprintln(logOut, valentineEvents) }
 		if updateState(msg, state) && !state.Start.IsZero() && (state.InGame() || msg.Type == "victory") {
 			fmt.Fprintln(csvOut, &CsvPrinter{state.Map, msg.Time.Sub(state.Start), msg.Time, *state})
 			s := score(state, msg.Time)
@@ -1084,6 +1293,7 @@ func main() {
 					dp.winner = msg.Val.(parser.GameResultMessage).Winner.String()
 					dp.winType = msg.Val.(parser.GameResultMessage).EndCondition.String()
 				}
+				dp.valentineEvents = valentineEvents
 				broadcast <- dp
 			}
 			if s <= 0.5 {

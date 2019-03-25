@@ -42,6 +42,8 @@ type dataPoint struct {
 	stats []playerStat
 	mp, winner, winType string
 	dur time.Duration
+
+	valentineEvents []valentineEvent
 }
 func runRegistry(in <-chan interface{}, reg <-chan *chan<- interface{}, unreg <-chan *chan<- interface{}) {
 	registry := make(map[*chan<- interface{}]struct{})
@@ -272,6 +274,15 @@ func startWebServer(dataSource <-chan interface{}) {
 					}
 					p.Data.Parts = []dataPart{{Tag: "next", Data: d},
 											  {Tag: "stats", Data: s}}
+					if len(v.valentineEvents) > 0 {
+						p.Data.Parts = append(p.Data.Parts, dataPart{
+							Tag: "valentineEvent",
+							Data: map[string]interface{}{
+								"time": string(timeBuff),
+								"events": v.valentineEvents,
+							},
+						})
+					}
 				}
 				w, e := conn.NextWriter(websocket.TextMessage)
 				if e != nil { fmt.Println(e); break }
