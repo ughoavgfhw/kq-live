@@ -3,14 +3,36 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"io"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/gorilla/websocket"
 
 	"github.com/ughoavgfhw/kq-live/assets"
 )
+
+func requireTemplate(name string, configFS http.FileSystem) *template.Template {
+	// The config can load assets from configFS, and the functions are always
+	// associated with the top-level template, which means the configFS must be
+	// used by all of them.
+	tpl := template.Must(assets.LoadTemplate("/base.tpl", configFS))
+	_ = template.Must(assets.ParseTemplate(tpl.New(name), name + ".tpl"))
+	// The config must only be added after the main template, since it may
+	// override the defaults.
+	if config, err := configFS.Open("/config.tpl"); err == nil {
+		_ = template.Must(assets.ParseTemplateFile(tpl.New("config"), config))
+	} else {
+		if os.IsNotExist(err) {
+			fmt.Println("No config found for ", name)
+		} else {
+			panic(err)
+		}
+	}
+	return tpl
+}
 
 type dataPoint struct {
 	when time.Time
