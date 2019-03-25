@@ -1,9 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"html/template"
 	"io"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -11,10 +14,34 @@ import (
 	"github.com/ughoavgfhw/kq-live/assets"
 )
 
+func requireTemplate(name string, configFS http.FileSystem) *template.Template {
+	// The config can load assets from configFS, and the functions are always
+	// associated with the top-level template, which means the configFS must be
+	// used by all of them.
+	tpl := template.Must(assets.LoadTemplate("/base.tpl", configFS))
+	_ = template.Must(assets.ParseTemplate(tpl.New(name), name + ".tpl"))
+	// The config must only be added after the main template, since it may
+	// override the defaults.
+	if config, err := configFS.Open("/config.tpl"); err == nil {
+		_ = template.Must(assets.ParseTemplateFile(tpl.New("config"), config))
+	} else {
+		if os.IsNotExist(err) {
+			fmt.Println("No config found for ", name)
+		} else {
+			panic(err)
+		}
+	}
+	return tpl
+}
+
 type dataPoint struct {
 	when time.Time
 	vals []float64
 	event string
+
+	stats []playerStat
+	mp, winner, winType string
+	dur time.Duration
 }
 func runRegistry(in <-chan interface{}, reg <-chan *chan<- interface{}, unreg <-chan *chan<- interface{}) {
 	registry := make(map[*chan<- interface{}]struct{})
@@ -37,6 +64,7 @@ func startWebServer(dataSource <-chan interface{}) {
 	reg := make(chan *chan<- interface{}, 1)
 	unreg := make(chan *chan<- interface{})
 	go runRegistry(dataSource, reg, unreg)
+	http.Handle("/static/", http.FileServer(assets.FS))
 	http.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
 		var content http.File
 		var err error
@@ -60,8 +88,13 @@ func startWebServer(dataSource <-chan interface{}) {
 		if info, err := content.Stat(); err != nil { modtime = info.ModTime() }
 		http.ServeContent(w, req, "index.html", modtime, content)
 	})
+	statsTpl := requireTemplate("stats", assets.FS)
+	http.HandleFunc("/stats", func(w http.ResponseWriter, rep *http.Request) {
+		err := statsTpl.Execute(w, nil)
+		if err != nil { panic(err) }
+	})
 	var upgrader websocket.Upgrader
-	http.HandleFunc("/ws", func(w http.ResponseWriter, req *http.Request) {
+	http.HandleFunc("/predictions", func(w http.ResponseWriter, req *http.Request) {
 		conn, err := upgrader.Upgrade(w, req, nil)
 		if err != nil {
 			fmt.Println(err)
@@ -98,6 +131,156 @@ func startWebServer(dataSource <-chan interface{}) {
 					if e != nil { fmt.Println(e); break }
 					if ce != nil { fmt.Println(ce); break }
 				}
+			}
+			unreg <- &writeEnd
+			conn.Close()
+		}()
+	})
+	http.HandleFunc("/ws", func(w http.ResponseWriter, req *http.Request) {
+		conn, err := upgrader.Upgrade(w, req, nil)
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		dataChan := make(chan string)
+		go func() {
+			for {
+				_, r, err := conn.NextReader()
+				if err != nil {
+					fmt.Println(err)
+					close(dataChan)
+					break
+				}
+				dec := json.NewDecoder(r)
+				dec.DisallowUnknownFields()
+				var tok json.Token
+				// TODO: Send back an error on parse error, handle inputs.
+				if tok, err = dec.Token(); err != nil {
+					fmt.Println("failed to parse message;", err)
+					continue
+				} else if v, ok := tok.(json.Delim); !ok {
+					fmt.Println("failed to parse message;", err)
+					continue
+				} else if v != '{' {
+					fmt.Println("failed to parse message;", err)
+					continue
+				}
+				if tok, err = dec.Token(); err != nil {
+					fmt.Println("failed to parse message;", err)
+					continue
+				} else if v, ok := tok.(string); !ok {
+					fmt.Println("failed to parse message;", err)
+					continue
+				} else if v != "type" {
+					fmt.Println("failed to parse message;", err)
+					continue
+				}
+				var typ string
+				if tok, err = dec.Token(); err != nil {
+					fmt.Println("failed to parse message;", err)
+					continue
+				} else if v, ok := tok.(string); !ok {
+					fmt.Println("failed to parse message;", err)
+					continue
+				} else {
+					typ = v
+				}
+				if tok, err = dec.Token(); err != nil {
+					fmt.Println("failed to parse message;", err)
+					continue
+				} else if v, ok := tok.(string); !ok {
+					fmt.Println("failed to parse message;", err)
+					continue
+				} else if v != "data" {
+					fmt.Println("failed to parse message;", err)
+					continue
+				}
+				// TODO: Parse an expected structure based on type.
+				var data interface{}
+				if err = dec.Decode(&data); err != nil {
+					fmt.Println("failed to parse message;", err)
+					continue
+				}
+				if tok, err = dec.Token(); err != nil {
+					fmt.Println("failed to parse message;", err)
+					continue
+				} else if v, ok := tok.(json.Delim); !ok {
+					fmt.Println("failed to parse message;", err)
+					continue
+				} else if v != '}' {
+					fmt.Println("failed to parse message;", err)
+					continue
+				}
+				if tok, err = dec.Token(); err != io.EOF {
+					fmt.Println("failed to parse message; expected EOF; got", tok)
+				}
+				if typ == "client_start" {
+					for _, v := range data.(map[string]interface{})["sections"].([]interface{}) {
+						dataChan <- v.(string)
+					}
+				}
+			}
+		}()
+		c := make(chan interface{}, 256)
+		var writeEnd chan<- interface{} = c
+		reg <- &writeEnd
+		go func() {
+			var timeBuff []byte
+			doPredictions := false
+			for {
+				var v interface{}
+				select {
+				case v = <-c:
+					if !doPredictions { continue }
+				case s, ok := <-dataChan:
+					if !ok { break }
+					if s == "prediction" { doPredictions = true }
+					continue
+				}
+				type dataPart struct {
+					Tag string `json:"tag"`
+					Data interface{} `json:"data,omitempty"`
+				}
+				type packetData struct {
+					Section string `json:"section"`
+					Parts []dataPart `json:"parts"`
+				}
+				type packet struct {
+					// Assume the encoder processes fields in declared order.
+					Type string `json:"type"`
+					Data packetData `json:"data"`
+				}
+				p := packet{Type: "data"}
+				p.Data.Section = "prediction"
+				switch v := v.(type) {
+				case time.Time:
+					timeBuff = v.AppendFormat(timeBuff[:0], time.RFC3339Nano)
+					p.Data.Parts = []dataPart{{Tag: "reset", Data: string(timeBuff)}}
+				case dataPoint:
+					timeBuff = v.when.AppendFormat(timeBuff[:0], time.RFC3339Nano)
+					d := make(map[string]interface{})
+					d["time"] = string(timeBuff)
+					if v.event != "" { d["event"] = v.event }
+					d["scores"] = v.vals
+					s := make(map[string]interface{})
+					s["stats"] = v.stats
+					s["map"] = v.mp
+					s["duration"] = v.dur
+					if v.winner != "" {
+						s["winner"] = v.winner
+						s["winType"] = v.winType
+					}
+					p.Data.Parts = []dataPart{{Tag: "next", Data: d},
+											  {Tag: "stats", Data: s}}
+				}
+				w, e := conn.NextWriter(websocket.TextMessage)
+				if e != nil { fmt.Println(e); break }
+				enc := json.NewEncoder(w)
+				enc.SetEscapeHTML(false)
+				e = enc.Encode(p)
+				ce := w.Close()
+				if e != nil { fmt.Println(e); break }
+				if ce != nil { fmt.Println(ce); break }
 			}
 			unreg <- &writeEnd
 			conn.Close()

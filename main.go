@@ -841,6 +841,179 @@ func (t *teeReader) ReadMessageString(out *kqio.MessageString) error {
 	return nil
 }
 
+type playerStat struct {
+	BerriesRun, BerriesKicked, BerriesKickedOpp int
+	SnailTime time.Duration
+	SnailDist int
+	WarriorTime, MaxWarriorTime, LastWarriorTime time.Duration
+	Kills, WarriorKills, QueenKills, DroneKills, SnailKills, EatKills, InGateKills int
+	Assists, DroneAssists, WarriorGateBumpOuts int
+	Deaths, WarriorDeaths, DroneDeaths, SnailDeaths, EatDeaths int
+	EatRescues, EatRescued int
+
+	// 100+ms after bump to get knocked from gate (bump is first). 500ms? of stun. 50ms after leaving gate for kill but sometimes 0. 50+ms after off snail for kill rarely over 50, <2 for escape
+	lastBumped, lastOnSnail, lastOffSnail, lastLeaveWarriorGate, warriorStart, lastLockoutEvent time.Time
+	lastBumper PlayerId
+	bumperType PlayerType  // In case they die between bumping and the assist.
+	snailStartPos int
+	inWarriorGate bool
+}
+var lastSnailEscape time.Time
+var playerStats [NumPlayers]playerStat
+
+func updateStats(msg *kqio.Message, state *kq.GameState) {
+	if msg.Type == "gamestart" {
+		playerStats = [NumPlayers]playerStat{}
+	}
+	if !state.InGame() && msg.Type != "victory" { return }
+	switch msg.Type {
+	case "glance":
+		val := msg.Val.(parser.GlanceMessage)
+		p1 := &playerStats[val.Player1.Index()]
+		p2 := &playerStats[val.Player2.Index()]
+		p1.lastBumped = msg.Time
+		p1.lastBumper = val.Player2
+		p1.bumperType = state.Players[val.Player2.Index()].Type
+		p2.lastBumped = msg.Time
+		p2.lastBumper = val.Player1
+		p2.bumperType = state.Players[val.Player1.Index()].Type
+		if p1.inWarriorGate {
+			p2.WarriorGateBumpOuts++
+		}
+		if p2.inWarriorGate {
+			p1.WarriorGateBumpOuts++
+		}
+	case "reserveMaiden":
+		val := msg.Val.(parser.EnterGateMessage)
+		if gateMap[val.Pos].typ == WarriorGate {
+			playerStats[val.Player.Index()].inWarriorGate = true
+		}
+	case "unreserveMaiden":
+		val := msg.Val.(parser.LeaveGateMessage)
+		p := &playerStats[val.Player.Index()]
+		if p.inWarriorGate { p.lastLeaveWarriorGate = msg.Time }
+		p.inWarriorGate = false
+	case "useMaiden":
+		val := msg.Val.(parser.UseGateMessage)
+		playerStats[val.Player.Index()].inWarriorGate = false
+		if val.Type == WarriorGate {
+			playerStats[val.Player.Index()].warriorStart = msg.Time
+		}
+	case "getOnSnail: ":
+		val := msg.Val.(parser.GetOnSnailMessage)
+		p := &playerStats[val.Rider.Index()]
+		p.lastOnSnail = msg.Time
+		p.snailStartPos = val.Pos.X
+	case "getOffSnail: ":
+		val := msg.Val.(parser.GetOffSnailMessage)
+		p := &playerStats[val.Rider.Index()]
+		p.SnailTime += msg.Time.Sub(p.lastOnSnail)
+		if val.Rider.Team() == BlueSide {
+			p.SnailDist += p.snailStartPos - val.Pos.X
+		} else {
+			p.SnailDist += val.Pos.X - p.snailStartPos
+		}
+		p.lastOffSnail = msg.Time
+	case "snailEscape":
+		val := msg.Val.(parser.SnailEscapeEatMessage)
+		playerStats[val.Escapee.Index()].EatRescued++
+		lastSnailEscape = msg.Time
+	case "berryDeposit":
+		val := msg.Val.(parser.DepositBerryMessage)
+		playerStats[val.Player.Index()].BerriesRun++
+	case "berryKickIn":
+		val := msg.Val.(parser.KickInBerryMessage)
+		bluePlayer := val.Player.Team() == BlueSide
+		blueHive := val.Pos.X < mapCenter
+		if bluePlayer == blueHive {
+			playerStats[val.Player.Index()].BerriesKicked++
+		} else {
+			playerStats[val.Player.Index()].BerriesKickedOpp++
+		}
+	case "playerKill":
+		val := msg.Val.(parser.PlayerKillMessage)
+		k := &playerStats[val.Killer.Index()]
+		v := &playerStats[val.Victim.Index()]
+		k.Kills++
+		v.Deaths++
+		switch val.VictimType {
+		case Queen:
+			k.QueenKills++
+		case Warrior:
+			k.WarriorKills++
+			v.WarriorDeaths++
+			v.LastWarriorTime = msg.Time.Sub(v.warriorStart)
+			v.WarriorTime += v.LastWarriorTime
+			if v.LastWarriorTime > v.MaxWarriorTime {
+				v.MaxWarriorTime = v.LastWarriorTime
+			}
+		case Drone:
+			k.DroneKills++
+			v.DroneDeaths++
+			if state.Players[val.Killer.Index()].IsOnSnail() {
+				k.EatKills++
+				v.EatDeaths++
+			} else if state.Players[val.Victim.Index()].IsOnSnail() ||
+				(!v.lastOffSnail.IsZero() && msg.Time.Add(-60*time.Millisecond).Before(v.lastOffSnail)) {
+				k.SnailKills++
+				v.SnailDeaths++
+				if !lastSnailEscape.IsZero() && msg.Time.Add(-60*time.Millisecond).Before(lastSnailEscape) {
+					k.EatRescues++
+				}
+			} else if !v.lastLeaveWarriorGate.IsZero() && msg.Time.Add(-60*time.Millisecond).Before(v.lastLeaveWarriorGate) {
+				k.InGateKills++
+			}
+		}
+		if !v.lastBumped.IsZero() && msg.Time.Add(-time.Second).Before(v.lastBumped) {
+			b := &playerStats[v.lastBumper.Index()]
+			b.Assists++
+			if v.bumperType == Drone {
+				b.DroneAssists++
+			}
+		}
+	case "victory":
+		val := msg.Val.(parser.GameResultMessage)
+		// Be sure to give snail rider and warriors their final credit.
+		for i := 0; i < NumPlayers; i++ {
+			if state.Players[i].Type != Warrior { continue }
+			p := &playerStats[i]
+			p.LastWarriorTime = msg.Time.Sub(p.warriorStart)
+			p.WarriorTime += p.LastWarriorTime
+			if p.LastWarriorTime > p.MaxWarriorTime {
+				p.MaxWarriorTime = p.LastWarriorTime
+			}
+		}
+		if val.EndCondition == SnailWin {
+			var endPos int
+			switch val.Winner {
+			case BlueSide:
+				if state.Map == NightMap {
+					endPos = 270
+				} else {
+					endPos = 60
+				}
+			case GoldSide:
+				if state.Map == NightMap {
+					endPos = 1650
+				} else {
+					endPos = 1860
+				}
+			}
+			for i := 0; i < NumPlayers; i++ {
+				if state.Players[i].IsOnSnail() {
+					p := &playerStats[i]
+					p.SnailTime += msg.Time.Sub(p.lastOnSnail)
+					if PlayerId(i + 1).Team() == BlueSide {
+						p.SnailDist += p.snailStartPos - endPos
+					} else {
+						p.SnailDist += endPos - p.snailStartPos
+					}
+				}
+			}
+		}
+	}
+}
+
 func main() {
 	broadcast := make(chan interface{})
 	go startWebServer(broadcast)
@@ -904,6 +1077,13 @@ func main() {
 					dp.event = fmt.Sprintf("%v %v", msg.Type, msg.Val)
 				}
 				for _, scorer := range scorers { dp.vals = append(dp.vals, scorer(state, msg.Time)) }
+				dp.stats = playerStats[:]
+				dp.mp = state.Map.String()
+				dp.dur = msg.Time.Sub(state.Start)
+				if msg.Type == "victory" {
+					dp.winner = msg.Val.(parser.GameResultMessage).Winner.String()
+					dp.winType = msg.Val.(parser.GameResultMessage).EndCondition.String()
+				}
 				broadcast <- dp
 			}
 			if s <= 0.5 {
