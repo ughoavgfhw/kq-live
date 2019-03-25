@@ -61,7 +61,7 @@ func startWebServer(dataSource <-chan interface{}) {
 		http.ServeContent(w, req, "index.html", modtime, content)
 	})
 	var upgrader websocket.Upgrader
-	http.HandleFunc("/ws", func(w http.ResponseWriter, req *http.Request) {
+	http.HandleFunc("/predictions", func(w http.ResponseWriter, req *http.Request) {
 		conn, err := upgrader.Upgrade(w, req, nil)
 		if err != nil {
 			fmt.Println(err)

@@ -19,7 +19,7 @@
 			for (var i = 0; i < multi_timeline.length; ++i) {
 				Plotly.newPlot(multi_timeline[i], [{ x: [], y: [], text: [] }], layout);
 			}
-			var ws = new WebSocket('ws://' + location.host + '/ws');
+			var ws = new WebSocket('ws://' + location.host + '/predictions');
 			ws.addEventListener('message', function(e) {
 				var data = e.data.split(',');
 				var command = data[0];

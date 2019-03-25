@@ -24,7 +24,7 @@
 			if (isNaN(which)) which = 0;
 			var pointer = document.getElementById('pointer');
 			setPath(0.5, pointer);
-			var ws = new WebSocket('ws://' + location.host + '/ws');
+			var ws = new WebSocket('ws://' + location.host + '/predictions');
 			ws.addEventListener('message', function(e) {
 				var data = e.data.split(',');
 				var command = data[0];
