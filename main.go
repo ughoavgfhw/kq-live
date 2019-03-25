@@ -1064,6 +1064,7 @@ func main() {
 			continue
 		}
 		fmt.Fprintln(msgDump, msg)
+		updateStats(&msg, state)
 		if updateState(msg, state) && !state.Start.IsZero() && (state.InGame() || msg.Type == "victory") {
 			fmt.Fprintln(csvOut, &CsvPrinter{state.Map, msg.Time.Sub(state.Start), msg.Time, *state})
 			s := score(state, msg.Time)
