@@ -38,6 +38,10 @@ type dataPoint struct {
 	when time.Time
 	vals []float64
 	event string
+
+	stats []playerStat
+	mp, winner, winType string
+	dur time.Duration
 }
 func runRegistry(in <-chan interface{}, reg <-chan *chan<- interface{}, unreg <-chan *chan<- interface{}) {
 	registry := make(map[*chan<- interface{}]struct{})
@@ -83,6 +87,11 @@ func startWebServer(dataSource <-chan interface{}) {
 		var modtime time.Time
 		if info, err := content.Stat(); err != nil { modtime = info.ModTime() }
 		http.ServeContent(w, req, "index.html", modtime, content)
+	})
+	statsTpl := requireTemplate("stats", assets.FS)
+	http.HandleFunc("/stats", func(w http.ResponseWriter, rep *http.Request) {
+		err := statsTpl.Execute(w, nil)
+		if err != nil { panic(err) }
 	})
 	var upgrader websocket.Upgrader
 	http.HandleFunc("/predictions", func(w http.ResponseWriter, req *http.Request) {
@@ -253,7 +262,16 @@ func startWebServer(dataSource <-chan interface{}) {
 					d["time"] = string(timeBuff)
 					if v.event != "" { d["event"] = v.event }
 					d["scores"] = v.vals
-					p.Data.Parts = []dataPart{{Tag: "next", Data: d}}
+					s := make(map[string]interface{})
+					s["stats"] = v.stats
+					s["map"] = v.mp
+					s["duration"] = v.dur
+					if v.winner != "" {
+						s["winner"] = v.winner
+						s["winType"] = v.winType
+					}
+					p.Data.Parts = []dataPart{{Tag: "next", Data: d},
+											  {Tag: "stats", Data: s}}
 				}
 				w, e := conn.NextWriter(websocket.TextMessage)
 				if e != nil { fmt.Println(e); break }
