@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -99,6 +100,147 @@ func startWebServer(dataSource <-chan interface{}) {
 					if e != nil { fmt.Println(e); break }
 					if ce != nil { fmt.Println(ce); break }
 				}
+			}
+			unreg <- &writeEnd
+			conn.Close()
+		}()
+	})
+	http.HandleFunc("/ws", func(w http.ResponseWriter, req *http.Request) {
+		conn, err := upgrader.Upgrade(w, req, nil)
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		dataChan := make(chan string)
+		go func() {
+			for {
+				_, r, err := conn.NextReader()
+				if err != nil {
+					fmt.Println(err)
+					close(dataChan)
+					break
+				}
+				dec := json.NewDecoder(r)
+				dec.DisallowUnknownFields()
+				var tok json.Token
+				// TODO: Send back an error on parse error, handle inputs.
+				if tok, err = dec.Token(); err != nil {
+					fmt.Println("failed to parse message;", err)
+					continue
+				} else if v, ok := tok.(json.Delim); !ok {
+					fmt.Println("failed to parse message;", err)
+					continue
+				} else if v != '{' {
+					fmt.Println("failed to parse message;", err)
+					continue
+				}
+				if tok, err = dec.Token(); err != nil {
+					fmt.Println("failed to parse message;", err)
+					continue
+				} else if v, ok := tok.(string); !ok {
+					fmt.Println("failed to parse message;", err)
+					continue
+				} else if v != "type" {
+					fmt.Println("failed to parse message;", err)
+					continue
+				}
+				var typ string
+				if tok, err = dec.Token(); err != nil {
+					fmt.Println("failed to parse message;", err)
+					continue
+				} else if v, ok := tok.(string); !ok {
+					fmt.Println("failed to parse message;", err)
+					continue
+				} else {
+					typ = v
+				}
+				if tok, err = dec.Token(); err != nil {
+					fmt.Println("failed to parse message;", err)
+					continue
+				} else if v, ok := tok.(string); !ok {
+					fmt.Println("failed to parse message;", err)
+					continue
+				} else if v != "data" {
+					fmt.Println("failed to parse message;", err)
+					continue
+				}
+				// TODO: Parse an expected structure based on type.
+				var data interface{}
+				if err = dec.Decode(&data); err != nil {
+					fmt.Println("failed to parse message;", err)
+					continue
+				}
+				if tok, err = dec.Token(); err != nil {
+					fmt.Println("failed to parse message;", err)
+					continue
+				} else if v, ok := tok.(json.Delim); !ok {
+					fmt.Println("failed to parse message;", err)
+					continue
+				} else if v != '}' {
+					fmt.Println("failed to parse message;", err)
+					continue
+				}
+				if tok, err = dec.Token(); err != io.EOF {
+					fmt.Println("failed to parse message; expected EOF; got", tok)
+				}
+				if typ == "client_start" {
+					for _, v := range data.(map[string]interface{})["sections"].([]interface{}) {
+						dataChan <- v.(string)
+					}
+				}
+			}
+		}()
+		c := make(chan interface{}, 256)
+		var writeEnd chan<- interface{} = c
+		reg <- &writeEnd
+		go func() {
+			var timeBuff []byte
+			doPredictions := false
+			for {
+				var v interface{}
+				select {
+				case v = <-c:
+					if !doPredictions { continue }
+				case s, ok := <-dataChan:
+					if !ok { break }
+					if s == "prediction" { doPredictions = true }
+					continue
+				}
+				type dataPart struct {
+					Tag string `json:"tag"`
+					Data interface{} `json:"data,omitempty"`
+				}
+				type packetData struct {
+					Section string `json:"section"`
+					Parts []dataPart `json:"parts"`
+				}
+				type packet struct {
+					// Assume the encoder processes fields in declared order.
+					Type string `json:"type"`
+					Data packetData `json:"data"`
+				}
+				p := packet{Type: "data"}
+				p.Data.Section = "prediction"
+				switch v := v.(type) {
+				case time.Time:
+					timeBuff = v.AppendFormat(timeBuff[:0], time.RFC3339Nano)
+					p.Data.Parts = []dataPart{{Tag: "reset", Data: string(timeBuff)}}
+				case dataPoint:
+					timeBuff = v.when.AppendFormat(timeBuff[:0], time.RFC3339Nano)
+					d := make(map[string]interface{})
+					d["time"] = string(timeBuff)
+					if v.event != "" { d["event"] = v.event }
+					d["scores"] = v.vals
+					p.Data.Parts = []dataPart{{Tag: "next", Data: d}}
+				}
+				w, e := conn.NextWriter(websocket.TextMessage)
+				if e != nil { fmt.Println(e); break }
+				enc := json.NewEncoder(w)
+				enc.SetEscapeHTML(false)
+				e = enc.Encode(p)
+				ce := w.Close()
+				if e != nil { fmt.Println(e); break }
+				if ce != nil { fmt.Println(ce); break }
 			}
 			unreg <- &writeEnd
 			conn.Close()
