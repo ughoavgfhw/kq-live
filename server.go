@@ -119,7 +119,7 @@ func startWebServer(dataSource <-chan interface{}) {
 				switch v := v.(type) {
 				case time.Time:
 					timeBuff = v.AppendFormat(timeBuff[:0], time.RFC3339Nano)
-					_, e = fmt.Fprintf(w, "reset,%s,4", timeBuff)
+					_, e = fmt.Fprintf(w, "reset,%s,5", timeBuff)
 					ce := w.Close()
 					if e != nil { fmt.Println(e); break }
 					if ce != nil { fmt.Println(ce); break }
