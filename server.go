@@ -93,6 +93,17 @@ func startWebServer(dataSource <-chan interface{}) {
 		err := statsTpl.Execute(w, nil)
 		if err != nil { panic(err) }
 	})
+	statsboardTpl := requireTemplate("statsboard", assets.FS)
+	http.HandleFunc("/statsboard/", func(w http.ResponseWriter, req *http.Request) {
+		var side string
+		switch req.URL.Path {
+			case "/statsboard/blue", "/statsboard/blue/": side = "blue"
+			case "/statsboard/gold", "/statsboard/gold/": side = "gold"
+			default: panic(req.URL)
+		}
+		err := statsboardTpl.Execute(w, map[string]interface{}{"Side": side})
+		if err != nil { panic(err) }
+	})
 	var upgrader websocket.Upgrader
 	http.HandleFunc("/predictions", func(w http.ResponseWriter, req *http.Request) {
 		conn, err := upgrader.Upgrade(w, req, nil)
