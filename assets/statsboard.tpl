@@ -69,9 +69,10 @@ new Statsboard(document.getElementById('statsboard{{.Side}}'), {{.Side}});
 		height: 64px;
 		margin: 10px 40px 0 40px;
 		text-align: center;
-		font-size: 24pt;
+		font-size: 30pt;
 		color: white;
-		text-shadow: 0 0 0.1em black;
+		{{/* Triple shadow to make it darker. */ -}}
+		text-shadow: 0 0 0.2em black, 0 0 0.2em black, 0 0 0.2em black;
 	}
 	.statsboardCell.checks { background-position: 0; }
 	.statsboardCell.skulls { background-position: -100px; }
@@ -84,12 +85,12 @@ new Statsboard(document.getElementById('statsboard{{.Side}}'), {{.Side}});
 		bottom: 0;
 		min-width: 2ch;
 	}
-	.statsboardCell .kills { right: 63px; }
-	.statsboardCell .deaths { left: 63px; }
+	.statsboardCell .kills { right: 53px; }
+	.statsboardCell .deaths { left: 53px; }
 	[statsboardqueenkills]::before {
 		display: block;
 		position: absolute;
-		bottom: 55px;
+		bottom: 53px;
 		left: 11px;
 		right: 0;
 	}
