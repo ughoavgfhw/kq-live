@@ -251,6 +251,11 @@ func startWebServer(dataSource <-chan interface{}) {
 		if info, err := content.Stat(); err != nil { modtime = info.ModTime() }
 		http.ServeContent(w, req, "score_control.html", modtime, content)
 	})
+	scoreboardTpl := requireTemplate("scoreboard", http.Dir("config"))
+	http.HandleFunc("/scoreboard", func(w http.ResponseWriter, rep *http.Request) {
+		err := scoreboardTpl.Execute(w, map[string]interface{}{"GoldOnLeft": false})
+		if err != nil { panic(err) }
+	})
 	statsTpl := requireTemplate("stats", assets.FS)
 	http.HandleFunc("/stats", func(w http.ResponseWriter, rep *http.Request) {
 		err := statsTpl.Execute(w, nil)
@@ -444,6 +449,7 @@ func startWebServer(dataSource <-chan interface{}) {
 			var timeBuff []byte
 			doPredictions := false
 			doControl := false
+			doCurrentMatch := false
 			for {
 				var v interface{}
 				select {
@@ -453,6 +459,7 @@ func startWebServer(dataSource <-chan interface{}) {
 					switch s {
 					case "prediction": doPredictions = true
 					case "control": doControl = true
+					case "currentMatch": doCurrentMatch = true
 					}
 					continue
 				}
@@ -495,8 +502,13 @@ func startWebServer(dataSource <-chan interface{}) {
 					p.Data.Parts = []dataPart{{Tag: "next", Data: d},
 											  {Tag: "stats", Data: s}}
 				case MatchVictoryRule:
+					var tag string
 					if doControl {
 						p.Data.Section = "control"
+						tag = "matchSettings"
+					} else if doCurrentMatch {
+						p.Data.Section = "currentMatch"
+						tag = "settings"
 					} else {
 						continue
 					}
@@ -515,10 +527,16 @@ func startWebServer(dataSource <-chan interface{}) {
 						d.VictoryRule.Rule = "StraightN"
 						d.VictoryRule.Length = int(vr)
 					}
-					p.Data.Parts = []dataPart{{Tag: "matchSettings", Data: d}}
+					p.Data.Parts = []dataPart{{Tag: tag, Data: d}}
 				case *MatchScores:
+					//!!!!: Race condition here, as the MatchScores are being updated in a different goroutine. So far it seems to have been fine but this should be fixed when redesigning.
+					var teamTag, scoreTag string
 					if doControl {
 						p.Data.Section = "control"
+						teamTag, scoreTag = "currentTeams", "currentScores"
+					} else if doCurrentMatch {
+						p.Data.Section = "currentMatch"
+						teamTag, scoreTag = "teams", "scores"
 					} else {
 						continue
 					}
@@ -529,8 +547,8 @@ func startWebServer(dataSource <-chan interface{}) {
 					s := make(map[string]interface{})
 					s["blue"] = v.ScoreA
 					s["gold"] = v.ScoreB
-					p.Data.Parts = []dataPart{{Tag: "currentTeams", Data: t},
-											  {Tag: "currentScores", Data: s}}
+					p.Data.Parts = []dataPart{{Tag: teamTag, Data: t},
+											  {Tag: scoreTag, Data: s}}
 				}
 				w, e := conn.NextWriter(websocket.TextMessage)
 				if e != nil { fmt.Println(e); break }
