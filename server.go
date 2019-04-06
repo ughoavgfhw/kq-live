@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	kq "github.com/ughoavgfhw/libkq/common"
 
 	"github.com/ughoavgfhw/kq-live/assets"
 )
@@ -60,10 +61,151 @@ func runRegistry(in <-chan interface{}, reg <-chan *chan<- interface{}, unreg <-
 	}
 }
 
+type gameTracker struct {
+	Stop func()
+	SetVictoryRule func(rule MatchVictoryRule)
+	SwapSides func()
+	AdvanceMatch func()
+	CurrentTeams func() (blueTeam string, goldTeam string)
+	SetCurrentTeams func(blue, gold string)
+	Scores func() (blueScore int, goldScore int)
+	SetScores func(blue, gold int)
+	OnDeckTeams func() (blueTeam string, goldTeam string)
+	SetOnDeckTeams func(blue, gold string)
+}
+
+func startGameTracker(sendChangesTo chan<- interface{}) gameTracker {
+	type teams struct { blue, gold string }
+	type scores struct { blue, gold int }
+	type command struct {
+		cmd int
+		data interface{}
+	}
+	send := make(chan command)
+	reply := make(chan interface{})
+
+	go func() {
+		defer close(reply)
+		tracker := StartUnstructuredPlay(BestOfN(0))
+		for cmd := range send {
+			switch cmd.cmd {
+			case 0:
+				tracker.SetVictoryRule(cmd.data.(MatchVictoryRule))
+				sendChangesTo <- tracker.VictoryRule()
+			case 1:
+				tracker.SwapSides()
+				sendChangesTo <- tracker.CurrentMatch()
+			case 2:
+				tracker.AdvanceMatch()
+				sendChangesTo <- tracker.CurrentMatch()
+			case 3:
+				ms := tracker.CurrentMatch()
+				if cmd.data == nil {
+					if tracker.TeamASide() == kq.BlueSide {
+						reply <- teams{ms.TeamA, ms.TeamB}
+					} else {
+						reply <- teams{ms.TeamB, ms.TeamA}
+					}
+				} else {
+					t := cmd.data.(teams)
+					if tracker.TeamASide() == kq.BlueSide {
+						ms.TeamA, ms.TeamB = t.blue, t.gold
+					} else {
+						ms.TeamB, ms.TeamA = t.blue, t.gold
+					}
+					sendChangesTo <- ms
+				}
+			case 4:
+				ms := tracker.CurrentMatch()
+				if cmd.data == nil {
+					if tracker.TeamASide() == kq.BlueSide {
+						reply <- scores{ms.ScoreA, ms.ScoreB}
+					} else {
+						reply <- scores{ms.ScoreB, ms.ScoreA}
+					}
+				} else {
+					s := cmd.data.(scores)
+					if tracker.TeamASide() == kq.BlueSide {
+						ms.ScoreA, ms.ScoreB = s.blue, s.gold
+					} else {
+						ms.ScoreB, ms.ScoreA = s.blue, s.gold
+					}
+					sendChangesTo <- ms
+				}
+			case 5:
+				ms := tracker.UpcomingMatch(0)
+				if cmd.data == nil {
+					if tracker.TeamASide() == kq.BlueSide {
+						reply <- teams{ms.TeamA, ms.TeamB}
+					} else {
+						reply <- teams{ms.TeamB, ms.TeamA}
+					}
+				} else {
+					t := cmd.data.(teams)
+					if tracker.TeamASide() == kq.BlueSide {
+						ms.TeamA, ms.TeamB = t.blue, t.gold
+					} else {
+						ms.TeamB, ms.TeamA = t.blue, t.gold
+					}
+				}
+			}
+		}
+	}()
+
+	return gameTracker{
+		Stop: func() {
+			close(send)
+			<-reply
+		},
+		SetVictoryRule: func(rule MatchVictoryRule) {
+			send <- command{0, rule}
+		},
+		SwapSides: func() {
+			send <- command{1, nil}
+		},
+		AdvanceMatch: func() {
+			send <- command{2, nil}
+		},
+		CurrentTeams: func() (blueTeam string, goldTeam string) {
+			send <- command{3, nil}
+			r := (<-reply).(teams)
+			return r.blue, r.gold
+		},
+		SetCurrentTeams: func(blue, gold string) {
+			send <- command{3, teams{blue, gold}}
+		},
+		Scores: func() (blueScore int, goldScore int) {
+			send <- command{4, nil}
+			r := (<-reply).(scores)
+			return r.blue, r.gold
+		},
+		SetScores: func(blue, gold int) {
+			send <- command{4, scores{blue, gold}}
+		},
+		OnDeckTeams: func() (blueTeam string, goldTeam string)	 {
+			send <- command{5, nil}
+			r := (<-reply).(teams)
+			return r.blue, r.gold
+		},
+		SetOnDeckTeams: func(blue, gold string) {
+			send <- command{5, teams{blue, gold}}
+		},
+	}
+}
+
 func startWebServer(dataSource <-chan interface{}) {
+	mixed := make(chan interface{})
+	go func() {
+		for v := range dataSource {
+			mixed <- v
+		}
+	}()
+	tracker := startGameTracker(mixed)
+	_ = tracker
+
 	reg := make(chan *chan<- interface{}, 1)
 	unreg := make(chan *chan<- interface{})
-	go runRegistry(dataSource, reg, unreg)
+	go runRegistry(mixed, reg, unreg)
 	http.Handle("/static/", http.FileServer(assets.FS))
 	http.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
 		var content http.File
