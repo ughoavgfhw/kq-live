@@ -243,6 +243,14 @@ func startWebServer(dataSource <-chan interface{}) {
 		if info, err := content.Stat(); err != nil { modtime = info.ModTime() }
 		http.ServeContent(w, req, "index.html", modtime, content)
 	})
+	http.HandleFunc("/control/scores", func(w http.ResponseWriter, req *http.Request) {
+		// TODO: Serve the gzip-encoded form if available.
+		content, err := assets.FS.Open("/score_control.html")
+		if err != nil { panic(err) }
+		var modtime time.Time
+		if info, err := content.Stat(); err != nil { modtime = info.ModTime() }
+		http.ServeContent(w, req, "score_control.html", modtime, content)
+	})
 	statsTpl := requireTemplate("stats", assets.FS)
 	http.HandleFunc("/stats", func(w http.ResponseWriter, rep *http.Request) {
 		err := statsTpl.Execute(w, nil)
