@@ -443,14 +443,17 @@ func startWebServer(dataSource <-chan interface{}) {
 		go func() {
 			var timeBuff []byte
 			doPredictions := false
+			doControl := false
 			for {
 				var v interface{}
 				select {
 				case v = <-c:
-					if !doPredictions { continue }
 				case s, ok := <-dataChan:
 					if !ok { break }
-					if s == "prediction" { doPredictions = true }
+					switch s {
+					case "prediction": doPredictions = true
+					case "control": doControl = true
+					}
 					continue
 				}
 				type dataPart struct {
@@ -467,12 +470,15 @@ func startWebServer(dataSource <-chan interface{}) {
 					Data packetData `json:"data"`
 				}
 				p := packet{Type: "data"}
-				p.Data.Section = "prediction"
 				switch v := v.(type) {
 				case time.Time:
+					if !doPredictions { continue }
+					p.Data.Section = "prediction"
 					timeBuff = v.AppendFormat(timeBuff[:0], time.RFC3339Nano)
 					p.Data.Parts = []dataPart{{Tag: "reset", Data: string(timeBuff)}}
 				case dataPoint:
+					if !doPredictions { continue }
+					p.Data.Section = "prediction"
 					timeBuff = v.when.AppendFormat(timeBuff[:0], time.RFC3339Nano)
 					d := make(map[string]interface{})
 					d["time"] = string(timeBuff)
@@ -488,6 +494,43 @@ func startWebServer(dataSource <-chan interface{}) {
 					}
 					p.Data.Parts = []dataPart{{Tag: "next", Data: d},
 											  {Tag: "stats", Data: s}}
+				case MatchVictoryRule:
+					if doControl {
+						p.Data.Section = "control"
+					} else {
+						continue
+					}
+					type ds struct {
+						VictoryRule struct {
+							Rule string `json:"rule"`
+							Length int `json:"length"`
+						} `json:"victoryRule"`
+					}
+					var d ds
+					switch vr := v.(type) {
+					case BestOfN:
+						d.VictoryRule.Rule = "BestOfN"
+						d.VictoryRule.Length = int(vr)
+					case StraightN:
+						d.VictoryRule.Rule = "StraightN"
+						d.VictoryRule.Length = int(vr)
+					}
+					p.Data.Parts = []dataPart{{Tag: "matchSettings", Data: d}}
+				case *MatchScores:
+					if doControl {
+						p.Data.Section = "control"
+					} else {
+						continue
+					}
+					// TODO: Currently assuming A is blue
+					t := make(map[string]interface{})
+					t["blue"] = v.TeamA
+					t["gold"] = v.TeamB
+					s := make(map[string]interface{})
+					s["blue"] = v.ScoreA
+					s["gold"] = v.ScoreB
+					p.Data.Parts = []dataPart{{Tag: "currentTeams", Data: t},
+											  {Tag: "currentScores", Data: s}}
 				}
 				w, e := conn.NextWriter(websocket.TextMessage)
 				if e != nil { fmt.Println(e); break }
