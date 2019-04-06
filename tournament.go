@@ -83,6 +83,7 @@ type UnstructuredPlay struct {
 
 func StartUnstructuredPlay(victoryRule MatchVictoryRule) *UnstructuredPlay {
 	p := new(UnstructuredPlay)
+	p.current.Reset(new(MatchScores))
 	p.current.MatchVictoryRule = victoryRule
 	return p
 }

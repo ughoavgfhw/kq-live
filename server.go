@@ -96,8 +96,21 @@ func startGameTracker(sendChangesTo chan<- interface{}) gameTracker {
 				tracker.SwapSides()
 				sendChangesTo <- tracker.CurrentMatch()
 			case 2:
+				prev := tracker.CurrentMatch()
 				tracker.AdvanceMatch()
-				sendChangesTo <- tracker.CurrentMatch()
+				next := tracker.CurrentMatch()
+				sendChangesTo <- next
+				switch true {
+				case prev.ScoreA > prev.ScoreB:
+					fmt.Printf("%s defeats %s, %d-%d\n", prev.TeamA, prev.TeamB, prev.ScoreA, prev.ScoreB)
+				case prev.ScoreA < prev.ScoreB:
+					fmt.Printf("%s defeats %s, %d-%d\n", prev.TeamB, prev.TeamA, prev.ScoreB, prev.ScoreA)
+				default:
+					fmt.Printf("%s and %s tie, %d-%d\n", prev.TeamA, prev.TeamB, prev.ScoreA, prev.ScoreB)
+				}
+				if next.TeamA != "" || next.TeamB != "" {
+					fmt.Printf("Up next: %s vs %s\n", next.TeamA, next.TeamB)
+				}
 			case 3:
 				ms := tracker.CurrentMatch()
 				if cmd.data == nil {
@@ -367,9 +380,51 @@ func startWebServer(dataSource <-chan interface{}) {
 				if tok, err = dec.Token(); err != io.EOF {
 					fmt.Println("failed to parse message; expected EOF; got", tok)
 				}
-				if typ == "client_start" {
+				switch typ {
+				case "client_start":
 					for _, v := range data.(map[string]interface{})["sections"].([]interface{}) {
 						dataChan <- v.(string)
+					}
+				case "data":
+					m := data.(map[string]interface{})
+					if m["section"].(string) != "control" { break }
+					for _, part := range m["parts"].([]interface{}) {
+						tag := part.(map[string]interface{})["tag"]
+						d := part.(map[string]interface{})["data"]
+						switch tag {
+						case "advanceMatch": tracker.AdvanceMatch()
+						case "reset":
+							for _, p := range d.([]interface{}) {
+								switch p {
+								case "matchSettings": tracker.SetVictoryRule(BestOfN(0))
+								case "currentTeams": tracker.SetCurrentTeams("", "")
+								case "currentScores": tracker.SetScores(0, 0)
+								}
+							}
+						case "matchSettings":
+							vr := d.(map[string]interface{})["victoryRule"]
+							if vr == nil {
+								tracker.SetVictoryRule(BestOfN(0))
+								break
+							}
+							var rule MatchVictoryRule
+							switch vr.(map[string]interface{})["rule"] {
+							case "BestOfN":
+								rule = BestOfN(vr.(map[string]interface{})["length"].(float64))
+							case "StraightN":
+								rule = StraightN(vr.(map[string]interface{})["length"].(float64))
+							}
+							if rule == nil { break }
+							tracker.SetVictoryRule(rule)
+						case "currentTeams":
+							tracker.SetCurrentTeams(
+								d.(map[string]interface{})["blue"].(string),
+								d.(map[string]interface{})["gold"].(string))
+						case "currentScores":
+							tracker.SetScores(
+								int(d.(map[string]interface{})["blue"].(float64)),
+								int(d.(map[string]interface{})["gold"].(float64)))
+						}
 					}
 				}
 			}
