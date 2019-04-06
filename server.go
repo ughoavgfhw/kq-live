@@ -214,7 +214,6 @@ func startWebServer(dataSource <-chan interface{}) {
 		}
 	}()
 	tracker := startGameTracker(mixed)
-	_ = tracker
 
 	reg := make(chan *chan<- interface{}, 1)
 	unreg := make(chan *chan<- interface{})

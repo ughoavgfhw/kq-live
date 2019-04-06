@@ -244,7 +244,13 @@
 	new Scoreboard(document.getElementById("scoreboard"));
 {{- end}}
 
-{{define "Style"}}data:text/css,{{end}}
+{{define "Style"}}data:text/css,%23scoreboard{position:absolute;top:0;left:0;bottom:0;right:0;font-size:5vh;text-align:center}
+.scoreMarkers{position:absolute;bottom:0;width:5%}
+.scoreMarkers.left{right:50%}
+.scoreMarkers.right{left:50%}
+.teamName{position:absolute;bottom:0;width:30%}
+.teamName.left{right:55%}
+.teamName.right{left:55%}{{end}}
 
 {{define "Head" -}}
 	<title>kq-live scoreboard</title>
