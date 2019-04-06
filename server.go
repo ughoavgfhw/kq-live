@@ -63,6 +63,7 @@ func runRegistry(in <-chan interface{}, reg <-chan *chan<- interface{}, unreg <-
 
 type gameTracker struct {
 	Stop func()
+	VictoryRule func() MatchVictoryRule
 	SetVictoryRule func(rule MatchVictoryRule)
 	SwapSides func()
 	AdvanceMatch func()
@@ -90,8 +91,12 @@ func startGameTracker(sendChangesTo chan<- interface{}) gameTracker {
 		for cmd := range send {
 			switch cmd.cmd {
 			case 0:
-				tracker.SetVictoryRule(cmd.data.(MatchVictoryRule))
-				sendChangesTo <- tracker.VictoryRule()
+				if cmd.data == nil {
+					reply <- tracker.VictoryRule()
+				} else {
+					tracker.SetVictoryRule(cmd.data.(MatchVictoryRule))
+					sendChangesTo <- tracker.VictoryRule()
+				}
 			case 1:
 				tracker.SwapSides()
 				sendChangesTo <- tracker.CurrentMatch()
@@ -169,6 +174,10 @@ func startGameTracker(sendChangesTo chan<- interface{}) gameTracker {
 		Stop: func() {
 			close(send)
 			<-reply
+		},
+		VictoryRule: func() MatchVictoryRule {
+			send <- command{0, nil}
+			return (<-reply).(MatchVictoryRule)
 		},
 		SetVictoryRule: func(rule MatchVictoryRule) {
 			send <- command{0, rule}
@@ -457,8 +466,26 @@ func startWebServer(dataSource <-chan interface{}) {
 					if !ok { break }
 					switch s {
 					case "prediction": doPredictions = true
-					case "control": doControl = true
-					case "currentMatch": doCurrentMatch = true
+					case "control":
+						doControl = true
+						// Send current state. Definitely a hack but it works for now.
+						go func() {
+							c <- tracker.VictoryRule()
+							var ms MatchScores
+							ms.TeamA, ms.TeamB = tracker.CurrentTeams()
+							ms.ScoreA, ms.ScoreB = tracker.Scores()
+							c <- &ms
+						}()
+					case "currentMatch":
+						doCurrentMatch = true
+						// Send current state. Definitely a hack but it works for now.
+						go func() {
+							c <- tracker.VictoryRule()
+							var ms MatchScores
+							ms.TeamA, ms.TeamB = tracker.CurrentTeams()
+							ms.ScoreA, ms.ScoreB = tracker.Scores()
+							c <- &ms
+						}()
 					}
 					continue
 				}
