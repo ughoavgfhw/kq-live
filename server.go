@@ -359,16 +359,18 @@ func startWebServer(dataSource <-chan interface{}) {
 		go func() {
 			var timeBuff []byte
 			for v := range c {
-				w, e := conn.NextWriter(websocket.TextMessage)
-				if e != nil { fmt.Println(e); break }
 				switch v := v.(type) {
 				case time.Time:
+					w, e := conn.NextWriter(websocket.TextMessage)
+					if e != nil { fmt.Println(e); break }
 					timeBuff = v.AppendFormat(timeBuff[:0], time.RFC3339Nano)
-					_, e = fmt.Fprintf(w, "reset,%s,5", timeBuff)
+					_, e = fmt.Fprintf(w, "reset,%s,6", timeBuff)
 					ce := w.Close()
 					if e != nil { fmt.Println(e); break }
 					if ce != nil { fmt.Println(ce); break }
 				case dataPoint:
+					w, e := conn.NextWriter(websocket.TextMessage)
+					if e != nil { fmt.Println(e); break }
 					timeBuff = v.when.AppendFormat(timeBuff[:0], time.RFC3339Nano)
 					_, e = fmt.Fprintf(w, "next,%s,%s", timeBuff, v.event)
 					for _, val := range v.vals { _, e = fmt.Fprintf(w, ",%v", val) }
