@@ -1161,7 +1161,14 @@ func main() {
 	csvOut, e = os.Create("out.csv")
 	if e != nil { panic(e) }
 	fmt.Fprintln(csvOut, CsvHeader)
+	rateLimitTicker := time.NewTicker(100 * time.Millisecond)
+berryCount := 0
 	for {
+		var rateLimitPassed bool
+		select {
+		case <-rateLimitTicker.C: rateLimitPassed = true
+		default: rateLimitPassed = false
+		}
 		e = reader.ReadMessage(&msg)
 		if e != nil {
 			fmt.Fprintln(msgDump, "read error", e)
@@ -1203,7 +1210,15 @@ func main() {
 			}
 			t = msg.Time
 		}
+
+		if state.InGame() {
+			if berries := maps.MetadataForMap(state.Map).BerriesAvailable - state.BerriesUsed; berries != berryCount || (state.InFamine() && rateLimitPassed) {
+				berryCount = berries
+				broadcast <- famineUpdate{berries, state.FamineStart, msg.Time}
+			}
+		}
 	}
+	rateLimitTicker.Stop()
 
 	_ = t
 /*

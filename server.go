@@ -217,6 +217,12 @@ func startGameTracker(sendChangesTo chan<- interface{}) gameTracker {
 	}
 }
 
+type famineUpdate struct {
+	berriesLeft int
+	famineStart time.Time
+	currTime time.Time
+}
+
 type teamList []string
 var currTeamsMu sync.Mutex
 var currTeams teamList
@@ -325,6 +331,11 @@ func startWebServer(dataSource <-chan interface{}) {
 			default: panic(req.URL)
 		}
 		err := statsboardTpl.Execute(w, map[string]interface{}{"Side": side})
+		if err != nil { panic(err) }
+	})
+	famineTpl := requireTemplate("famine", assets.FS)
+	http.HandleFunc("/famineTracker", func(w http.ResponseWriter, req *http.Request) {
+		err := famineTpl.Execute(w, nil)
 		if err != nil { panic(err) }
 	})
 	var upgrader websocket.Upgrader
@@ -505,6 +516,7 @@ func startWebServer(dataSource <-chan interface{}) {
 			doPredictions := false
 			doControl := false
 			doCurrentMatch := false
+			doFamineUpdates := false
 			for {
 				var v interface{}
 				select {
@@ -536,6 +548,8 @@ func startWebServer(dataSource <-chan interface{}) {
 							ms.ScoreA, ms.ScoreB = tracker.Scores()
 							c <- &ms
 						}()
+					case "famineTracker":
+						doFamineUpdates = true
 					}
 					continue
 				}
@@ -630,6 +644,20 @@ func startWebServer(dataSource <-chan interface{}) {
 					if !doControl { continue }
 					p.Data.Section = "control"
 					p.Data.Parts = []dataPart{{Tag: "teamList", Data: v}}
+
+				case famineUpdate:
+					if !doFamineUpdates { continue }
+					p.Data.Section = "famineTracker"
+					d := map[string]interface{} {
+						"berriesLeft": v.berriesLeft,
+						"inFamine": !v.famineStart.IsZero(),
+					}
+					if !v.famineStart.IsZero() {
+						dur := 3*time.Minute - v.currTime.Sub(v.famineStart)
+						if dur < 0 { dur = 0 }
+						d["famineLeftSeconds"] = float64(dur) / float64(time.Second)
+					}
+					p.Data.Parts = []dataPart{{Tag: "update", Data: d}}
 				}
 				w, e := conn.NextWriter(websocket.TextMessage)
 				if e != nil { fmt.Println(e); break }
