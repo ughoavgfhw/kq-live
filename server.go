@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"html/template"
 	"io"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -215,6 +217,39 @@ func startGameTracker(sendChangesTo chan<- interface{}) gameTracker {
 	}
 }
 
+type teamList []string
+var currTeamsMu sync.Mutex
+var currTeams teamList
+func watchTeamsFile(c chan<- interface{}) *FileWatcher {
+	return WatchFile("teams.conf", func(f *os.File) {
+		if f == nil {
+			fmt.Println("No teams.conf file")
+			c <- teamList{}
+			currTeamsMu.Lock()
+			currTeams = currTeams[:0]
+			currTeamsMu.Unlock()
+			return
+		}
+		s := bufio.NewScanner(f)
+		var teams teamList
+		for s.Scan() {
+			str := s.Text()
+			if len(str) == 0 { continue }
+			if str[0] == '\t' { continue }  // Ignore players for now.
+			teams = append(teams, str)
+		}
+		if err := s.Err(); err != nil {
+			fmt.Printf("Error reading teams: %v\n", err)
+			return
+		}
+		fmt.Printf("Loaded %v teams\n", len(teams))
+		c <- teams
+		currTeamsMu.Lock()
+		currTeams = teams
+		currTeamsMu.Unlock()
+	})
+}
+
 func startWebServer(dataSource <-chan interface{}) {
 	mixed := make(chan interface{})
 	go func() {
@@ -223,6 +258,8 @@ func startWebServer(dataSource <-chan interface{}) {
 		}
 	}()
 	tracker := startGameTracker(mixed)
+
+	defer watchTeamsFile(mixed).Close()
 
 	reg := make(chan *chan<- interface{}, 1)
 	unreg := make(chan *chan<- interface{})
@@ -475,6 +512,9 @@ func startWebServer(dataSource <-chan interface{}) {
 							ms.TeamA, ms.TeamB = tracker.CurrentTeams()
 							ms.ScoreA, ms.ScoreB = tracker.Scores()
 							c <- &ms
+							currTeamsMu.Lock()
+							c <- currTeams
+							currTeamsMu.Unlock()
 						}()
 					case "currentMatch":
 						doCurrentMatch = true
@@ -575,6 +615,11 @@ func startWebServer(dataSource <-chan interface{}) {
 					s["gold"] = v.ScoreB
 					p.Data.Parts = []dataPart{{Tag: teamTag, Data: t},
 											  {Tag: scoreTag, Data: s}}
+
+				case teamList:
+					if !doControl { continue }
+					p.Data.Section = "control"
+					p.Data.Parts = []dataPart{{Tag: "teamList", Data: v}}
 				}
 				w, e := conn.NextWriter(websocket.TextMessage)
 				if e != nil { fmt.Println(e); break }
