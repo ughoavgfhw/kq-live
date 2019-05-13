@@ -252,12 +252,22 @@ func watchTeamsFile(c chan<- interface{}) *FileWatcher {
 
 func startWebServer(dataSource <-chan interface{}) {
 	mixed := make(chan interface{})
+	tracker := startGameTracker(mixed)
 	go func() {
 		for v := range dataSource {
 			mixed <- v
+			// huge hack to have this here
+			switch dp, _ := v.(dataPoint); dp.winner {
+			case "": break
+			case "blue":
+				b, g := tracker.Scores()
+				tracker.SetScores(b+1, g)
+			case "gold":
+				b, g := tracker.Scores()
+				tracker.SetScores(b, g+1)
+			}
 		}
 	}()
-	tracker := startGameTracker(mixed)
 
 	defer watchTeamsFile(mixed).Close()
 
