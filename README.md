@@ -23,6 +23,16 @@ use the cab's IP address instead of the host name.
    ```sh
    go get github.com/ughoavgfhw/kq-live
    ```
+1. Generate the embedded assets.
+   ```sh
+   go generate github.com/ughoavgfhw/kq-live/assets
+   ```
+   This must be done whenever any non-go files in the assets directory change,
+   as the binary embeds the file as of the previous generate.
+
+   Note: If you are actively modifying assets, the binary can be built with
+   `-tags=dev` to read assets from disk instead of embedding them. However,
+   the dev build assumes that the assets directory can be found at ./assets.
 1. Build the tool. There are two options here.
    - Build and install into the go binary directory, which can be added to your
      shell path.
@@ -37,12 +47,10 @@ use the cab's IP address instead of the host name.
 ## Existing Functionality
 
 - Reads events from the killer queen cabinet. All messages are output into a
-  file named `out.log`
+  file named `out.log`.
 
   Note: If you don't specify the cabinet URL on the command line, the tool
-  currently tries to read a log file from a hard-coded path. If libkq is
-  placed alongside the tool, this will probably work, but please don't rely
-  on it.
+  will use the default `ws://kq.local:12749`.
 
 - Tracks the state of the current game. Much of the state is output into a file
   named `out.csv`, with a row for every state change.
@@ -52,6 +60,11 @@ use the cab's IP address instead of the host name.
   displayed on a [meter](http://localhost:8080/?type=meter) or
   [line graph](http://localhost:8080/) via a web browser.
 
-Other functionality is available from
-[kqstats](https://github.com/ughoavgfhw/kqstats). I intend to migrate much of
-that functionality here, eventually.
+- Provides various web pages useful for streaming overlays.
+  - [Scoreboard](http://localhost:8080/scoreboard) and a
+    [control interface](http://localhost:8080/control/scores).
+  - Basic statistics for [blue](http://localhost:8080/statsboard/blue) and
+    [gold](http://localhost:8080/statsboard/gold) teams. There is also a larger
+    [statistics chart](http://localhost:8080/stats).
+  - Indicator of [famine state](http://localhost:8080/famineTracker).
+  - [Player photos](http://localhost:8080/teamPictures) for the current teams.
