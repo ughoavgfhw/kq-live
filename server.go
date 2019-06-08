@@ -7,6 +7,7 @@ import (
 	"html/template"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"sync"
 	"time"
@@ -223,26 +224,74 @@ type famineUpdate struct {
 	currTime time.Time
 }
 
+var playerPhotoDir = http.Dir("photos")
+func openPlayerPhoto(name string) (string, http.File) {
+	var filename string
+	var f http.File
+	var err error
+	for _, ext := range []string{"", ".jpg", ".png", ".gif"} {
+		var fn = name + ext
+		f, err = playerPhotoDir.Open(fn)
+		if err == nil { filename = fn; break }
+	}
+	return filename, f
+}
+var defaultPhotoUri string
+func init() {
+	name, f := openPlayerPhoto("default")
+	if f != nil {
+		f.Close()
+		defaultPhotoUri = "/teamPictures/photo/" + name
+	}
+}
+func getPlayerPhotoUri(name string) string {
+	if n, f := openPlayerPhoto(name); f != nil {
+		f.Close()
+		return "/teamPictures/photo/" + url.PathEscape(n)
+	}
+	return defaultPhotoUri
+}
+
 type teamList []string
+type playerData struct {
+	Name string `json:"name"`
+	PhotoUri string `json:"photoUri,omitempty"`
+}
 var currTeamsMu sync.Mutex
 var currTeams teamList
+var currPlayers map[string][]playerData
 func watchTeamsFile(c chan<- interface{}) *FileWatcher {
 	return WatchFile("teams.conf", func(f *os.File) {
 		if f == nil {
 			fmt.Println("No teams.conf file")
 			c <- teamList{}
+			c <- map[string][]playerData{}
 			currTeamsMu.Lock()
 			currTeams = currTeams[:0]
+			currPlayers = make(map[string][]playerData)
 			currTeamsMu.Unlock()
 			return
 		}
 		s := bufio.NewScanner(f)
 		var teams teamList
+		var players = make(map[string][]playerData)
+		var currTeamName string
 		for s.Scan() {
 			str := s.Text()
 			if len(str) == 0 { continue }
-			if str[0] == '\t' { continue }  // Ignore players for now.
-			teams = append(teams, str)
+			if str[0] == '\t' {
+				if currTeamName == "" {
+					fmt.Println("Invalid teams.conf: player data outside a team")
+				} else {
+					players[currTeamName] = append(players[currTeamName], playerData{Name: str[1:], PhotoUri: getPlayerPhotoUri(str[1:])})
+				}
+			} else {
+				teams = append(teams, str)
+				currTeamName = str
+				// Preallocate the memory, and make sure there is an entry in
+				// the map even if there is no player info for the team.
+				players[currTeamName] = make([]playerData, 0, 5)
+			}
 		}
 		if err := s.Err(); err != nil {
 			fmt.Printf("Error reading teams: %v\n", err)
@@ -250,8 +299,10 @@ func watchTeamsFile(c chan<- interface{}) *FileWatcher {
 		}
 		fmt.Printf("Loaded %v teams\n", len(teams))
 		c <- teams
+		c <- players
 		currTeamsMu.Lock()
 		currTeams = teams
+		currPlayers = players
 		currTeamsMu.Unlock()
 	})
 }
@@ -337,6 +388,19 @@ func startWebServer(dataSource <-chan interface{}) {
 	http.HandleFunc("/famineTracker", func(w http.ResponseWriter, req *http.Request) {
 		err := famineTpl.Execute(w, nil)
 		if err != nil { panic(err) }
+	})
+	teamPicsTpl := requireTemplate("team_pictures", assets.FS)
+	http.HandleFunc("/teamPictures", func(w http.ResponseWriter, req *http.Request) {
+		err := teamPicsTpl.Execute(w, map[string]interface{}{"GoldOnLeft": false, "DefaultPlayerPhoto": nil})
+		if err != nil { panic(err) }
+	})
+	http.HandleFunc("/teamPictures/photo/", func(w http.ResponseWriter, req *http.Request) {
+		name, _ := url.PathUnescape(req.URL.EscapedPath()[20:])
+		fn, f := openPlayerPhoto(name)
+		if f == nil { http.NotFound(w, req); return }
+		var modtime time.Time
+		if info, err := f.Stat(); err != nil { modtime = info.ModTime() }
+		http.ServeContent(w, req, fn, modtime, f)
 	})
 	var upgrader websocket.Upgrader
 	http.HandleFunc("/predictions", func(w http.ResponseWriter, req *http.Request) {
@@ -519,6 +583,7 @@ func startWebServer(dataSource <-chan interface{}) {
 			doControl := false
 			doCurrentMatch := false
 			doFamineUpdates := false
+			doTournamentData := false
 			for {
 				var v interface{}
 				select {
@@ -552,6 +617,13 @@ func startWebServer(dataSource <-chan interface{}) {
 						}()
 					case "famineTracker":
 						doFamineUpdates = true
+					case "tournamentData":
+						doTournamentData = true
+						go func() {
+							currTeamsMu.Lock()
+							c <- currPlayers
+							currTeamsMu.Unlock()
+						}()
 					}
 					continue
 				}
@@ -646,6 +718,11 @@ func startWebServer(dataSource <-chan interface{}) {
 					if !doControl { continue }
 					p.Data.Section = "control"
 					p.Data.Parts = []dataPart{{Tag: "teamList", Data: v}}
+
+				case map[string][]playerData:
+					if !doTournamentData { continue }
+					p.Data.Section = "tournamentData"
+					p.Data.Parts = []dataPart{{Tag: "teams", Data: v}}
 
 				case famineUpdate:
 					if !doFamineUpdates { continue }
