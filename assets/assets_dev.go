@@ -15,10 +15,14 @@ type filteredFile struct {
 
 func shouldFilter(base string) bool {
 	switch {
-	case base == ".": return false
-	case base[0] == '.': return true
-	case path.Ext(base) == ".go": return true
-	default: return false
+	case base == ".":
+		return false
+	case base[0] == '.':
+		return true
+	case path.Ext(base) == ".go":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -34,9 +38,14 @@ func (d filteredDir) Open(name string) (http.File, error) {
 func (f filteredFile) Readdir(count int) ([]os.FileInfo, error) {
 	fis, err := f.File.Readdir(count)
 	for i, n := 0, len(fis); i < n; {
-		if !shouldFilter(fis[i].Name()) { i++; continue }
+		if !shouldFilter(fis[i].Name()) {
+			i++
+			continue
+		}
 		n--
-		if i != n { fis[i] = fis[n] }
+		if i != n {
+			fis[i] = fis[n]
+		}
 		fis = fis[:n]
 		// Do not increment i.
 	}

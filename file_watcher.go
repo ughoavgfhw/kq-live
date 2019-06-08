@@ -75,15 +75,17 @@ func (fw *FileWatcher) watch(path string, callback func(f *os.File)) {
 	const fullCheckEveryN = 10
 
 	var f *os.File
-	defer func() { f.Close() }()  // Wrap in a function to use the future f.
+	defer func() { f.Close() }() // Wrap in a function to use the future f.
 	var curr os.FileInfo
 	tick := time.NewTicker(checkEveryDur)
 	defer tick.Stop()
 	count := 0
 	for {
 		select {
-		case <-tick.C: break
-		case <-fw.stop: return
+		case <-tick.C:
+			break
+		case <-fw.stop:
+			return
 		}
 		count -= 1
 		if count > 0 && !quickStatDiffers(f, curr) {
@@ -95,7 +97,7 @@ func (fw *FileWatcher) watch(path string, callback func(f *os.File)) {
 		} else {
 			curr = new
 		}
-		defer f.Close()  // Close the current file after the callback runs.
+		defer f.Close() // Close the current file after the callback runs.
 		f, _ = os.Open(path)
 		callback(f)
 	}

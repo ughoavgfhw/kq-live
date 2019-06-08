@@ -21,7 +21,9 @@ func assetUri(fs http.FileSystem, path string) (url template.URL, err error) {
 	} else {
 		f, err = fs.Open(path)
 	}
-	if err != nil { return }
+	if err != nil {
+		return
+	}
 	defer f.Close()
 	// TODO: For large assets, or those with unknown extensions, register them
 	// with a web server and return a URL to that server.
@@ -29,29 +31,53 @@ func assetUri(fs http.FileSystem, path string) (url template.URL, err error) {
 	// base64 encoding is guessed based on the type.
 	useBase64, mime := false, ""
 	switch pathlib.Ext(path) {
-	case ".css": useBase64, mime = false, "text/css"
-	case ".gif": useBase64, mime = true, "image/gif"
-	case ".ico": useBase64, mime = true, "image/x-icon"
-	case ".jpg", ".jpeg": useBase64, mime = true, "image/jpeg"
-	case ".json": useBase64, mime = false, "application/json"
-	case ".png": useBase64, mime = true, "image/png"
-	case ".svg": useBase64, mime = false, "image/svg+xml"
-	default: useBase64, mime = true, "application/octet-stream"
+	case ".css":
+		useBase64, mime = false, "text/css"
+	case ".gif":
+		useBase64, mime = true, "image/gif"
+	case ".ico":
+		useBase64, mime = true, "image/x-icon"
+	case ".jpg", ".jpeg":
+		useBase64, mime = true, "image/jpeg"
+	case ".json":
+		useBase64, mime = false, "application/json"
+	case ".png":
+		useBase64, mime = true, "image/png"
+	case ".svg":
+		useBase64, mime = false, "image/svg+xml"
+	default:
+		useBase64, mime = true, "application/octet-stream"
 	}
 
 	var builder strings.Builder
-	if _, err = builder.WriteString("data:"); err != nil { return }
-	if _, err = builder.WriteString(mime); err != nil { return }
+	if _, err = builder.WriteString("data:"); err != nil {
+		return
+	}
+	if _, err = builder.WriteString(mime); err != nil {
+		return
+	}
 	if useBase64 {
-		if _, err = builder.WriteString(";base64,"); err != nil { return }
+		if _, err = builder.WriteString(";base64,"); err != nil {
+			return
+		}
 		enc := base64.NewEncoder(base64.StdEncoding, &builder)
-		if _, err = io.Copy(enc, f); err != nil { return }
-		if err = enc.Close(); err != nil { return }
+		if _, err = io.Copy(enc, f); err != nil {
+			return
+		}
+		if err = enc.Close(); err != nil {
+			return
+		}
 	} else {
-		if _, err = builder.WriteString(";charset=UTF-8,"); err != nil { return }
+		if _, err = builder.WriteString(";charset=UTF-8,"); err != nil {
+			return
+		}
 		var b strings.Builder
-		if _, err = io.Copy(&b, f); err != nil { return }
-		if _, err = builder.WriteString(urllib.PathEscape(b.String())); err != nil { return }
+		if _, err = io.Copy(&b, f); err != nil {
+			return
+		}
+		if _, err = builder.WriteString(urllib.PathEscape(b.String())); err != nil {
+			return
+		}
 	}
 	url = template.URL(builder.String())
 	return
@@ -60,8 +86,10 @@ func assetUri(fs http.FileSystem, path string) (url template.URL, err error) {
 func parseJson(in interface{}) (v interface{}, err error) {
 	var data []byte
 	switch in := in.(type) {
-	case []byte: data = in
-	case string: data = []byte(in)
+	case []byte:
+		data = in
+	case string:
+		data = []byte(in)
 	default:
 		err = fmt.Errorf("parseJson: expected []byte or string; got %T", in)
 		return
@@ -73,7 +101,9 @@ func parseJson(in interface{}) (v interface{}, err error) {
 // Reads from the file and parses the result into the given template.
 func ParseTemplateFile(t *template.Template, f http.File) (*template.Template, error) {
 	var contents strings.Builder
-	if _, err := io.Copy(&contents, f); err != nil { return nil, err }
+	if _, err := io.Copy(&contents, f); err != nil {
+		return nil, err
+	}
 	return t.Parse(contents.String())
 }
 
@@ -93,11 +123,13 @@ func LoadTemplateFile(f http.File, assetFS http.FileSystem) (*template.Template,
 		"parseJson": parseJson,
 	}
 	var name string
-	if namer, ok := f.(interface { Name() string }); ok {
+	if namer, ok := f.(interface{ Name() string }); ok {
 		name = namer.Name()
 	} else {
 		fi, err := f.Stat()
-		if err != nil { return nil, err }
+		if err != nil {
+			return nil, err
+		}
 		name = fi.Name()
 	}
 	return ParseTemplateFile(template.New(name).Funcs(funcs), f)

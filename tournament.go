@@ -4,13 +4,13 @@ import kq "github.com/ughoavgfhw/libkq/common"
 
 type GameScore struct {
 	TeamASide kq.Side
-	Winner kq.Side
-	WinType kq.WinType
+	Winner    kq.Side
+	WinType   kq.WinType
 }
 
 type MatchScores struct {
-	TeamA string
-	TeamB string
+	TeamA  string
+	TeamB  string
 	ScoreA int
 	ScoreB int
 
@@ -39,9 +39,11 @@ func (m *ActiveMatch) Reset(scores *MatchScores) {
 // Switches which team is on which side.
 func (m *ActiveMatch) SwapSides() {
 	switch m.TeamASide {
-	case kq.BlueSide: m.TeamASide = kq.GoldSide
-	case kq.GoldSide: m.TeamASide = kq.BlueSide
-	default:  // Uninitialized
+	case kq.BlueSide:
+		m.TeamASide = kq.GoldSide
+	case kq.GoldSide:
+		m.TeamASide = kq.BlueSide
+	default: // Uninitialized
 	}
 }
 
@@ -50,8 +52,8 @@ func (m *ActiveMatch) SwapSides() {
 func (m *ActiveMatch) RecordGame(winner kq.Side, winType kq.WinType) {
 	m.Games = append(m.Games, &GameScore{
 		TeamASide: m.TeamASide,
-		Winner: winner,
-		WinType: winType,
+		Winner:    winner,
+		WinType:   winType,
 	})
 	if winner == m.TeamASide {
 		m.ScoreA++
@@ -77,7 +79,7 @@ func (m *ActiveMatch) IsComplete() bool {
 }
 
 type UnstructuredPlay struct {
-	current ActiveMatch
+	current  ActiveMatch
 	upcoming []*MatchScores
 }
 
@@ -151,7 +153,7 @@ func (p *UnstructuredPlay) CurrentMatchIsComplete() bool {
 	return p.current.IsComplete()
 }
 
-type MatchVictoryRule interface{
+type MatchVictoryRule interface {
 	MaxPossibleWins() int
 	MatchIsComplete(scoreA, scoreB int) bool
 }
@@ -168,5 +170,5 @@ type StraightN int
 
 func (n StraightN) MaxPossibleWins() int { return int(n) }
 func (n StraightN) MatchIsComplete(scoreA, scoreB int) bool {
-	return scoreA + scoreB >= int(n)
+	return scoreA+scoreB >= int(n)
 }

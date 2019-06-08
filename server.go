@@ -23,7 +23,7 @@ func requireTemplate(name string, configFS http.FileSystem) *template.Template {
 	// associated with the top-level template, which means the configFS must be
 	// used by all of them.
 	tpl := template.Must(assets.LoadTemplate("/base.tpl", configFS))
-	_ = template.Must(assets.ParseTemplate(tpl.New(name), name + ".tpl"))
+	_ = template.Must(assets.ParseTemplate(tpl.New(name), name+".tpl"))
 	// The config must only be added after the main template, since it may
 	// override the defaults.
 	if config, err := configFS.Open("/config.tpl"); err == nil {
@@ -39,25 +39,28 @@ func requireTemplate(name string, configFS http.FileSystem) *template.Template {
 }
 
 type dataPoint struct {
-	when time.Time
-	vals []float64
+	when  time.Time
+	vals  []float64
 	event string
 
-	stats []playerStat
+	stats               []playerStat
 	mp, winner, winType string
-	dur time.Duration
+	dur                 time.Duration
 }
+
 func runRegistry(in <-chan interface{}, reg <-chan *chan<- interface{}, unreg <-chan *chan<- interface{}) {
 	registry := make(map[*chan<- interface{}]struct{})
 	for {
 		select {
-		case c := <-reg: registry[c] = struct{}{}
-		case c := <-unreg: delete(registry, c)
+		case c := <-reg:
+			registry[c] = struct{}{}
+		case c := <-unreg:
+			delete(registry, c)
 		case x := <-in:
 			for c, _ := range registry {
 				select {
 				case *c <- x:
-				default:  // Drop packets to a client instead of blocking the entire server
+				default: // Drop packets to a client instead of blocking the entire server
 				}
 			}
 		}
@@ -65,24 +68,24 @@ func runRegistry(in <-chan interface{}, reg <-chan *chan<- interface{}, unreg <-
 }
 
 type gameTracker struct {
-	Stop func()
-	VictoryRule func() MatchVictoryRule
-	SetVictoryRule func(rule MatchVictoryRule)
-	SwapSides func()
-	AdvanceMatch func()
-	CurrentTeams func() (blueTeam string, goldTeam string)
+	Stop            func()
+	VictoryRule     func() MatchVictoryRule
+	SetVictoryRule  func(rule MatchVictoryRule)
+	SwapSides       func()
+	AdvanceMatch    func()
+	CurrentTeams    func() (blueTeam string, goldTeam string)
 	SetCurrentTeams func(blue, gold string)
-	Scores func() (blueScore int, goldScore int)
-	SetScores func(blue, gold int)
-	OnDeckTeams func() (blueTeam string, goldTeam string)
-	SetOnDeckTeams func(blue, gold string)
+	Scores          func() (blueScore int, goldScore int)
+	SetScores       func(blue, gold int)
+	OnDeckTeams     func() (blueTeam string, goldTeam string)
+	SetOnDeckTeams  func(blue, gold string)
 }
 
 func startGameTracker(sendChangesTo chan<- interface{}) gameTracker {
-	type teams struct { blue, gold string }
-	type scores struct { blue, gold int }
+	type teams struct{ blue, gold string }
+	type scores struct{ blue, gold int }
 	type command struct {
-		cmd int
+		cmd  int
 		data interface{}
 	}
 	send := make(chan command)
@@ -207,7 +210,7 @@ func startGameTracker(sendChangesTo chan<- interface{}) gameTracker {
 		SetScores: func(blue, gold int) {
 			send <- command{4, scores{blue, gold}}
 		},
-		OnDeckTeams: func() (blueTeam string, goldTeam string)	 {
+		OnDeckTeams: func() (blueTeam string, goldTeam string) {
 			send <- command{5, nil}
 			r := (<-reply).(teams)
 			return r.blue, r.gold
@@ -221,10 +224,11 @@ func startGameTracker(sendChangesTo chan<- interface{}) gameTracker {
 type famineUpdate struct {
 	berriesLeft int
 	famineStart time.Time
-	currTime time.Time
+	currTime    time.Time
 }
 
 var playerPhotoDir = http.Dir("photos")
+
 func openPlayerPhoto(name string) (string, http.File) {
 	var filename string
 	var f http.File
@@ -232,11 +236,16 @@ func openPlayerPhoto(name string) (string, http.File) {
 	for _, ext := range []string{"", ".jpg", ".png", ".gif"} {
 		var fn = name + ext
 		f, err = playerPhotoDir.Open(fn)
-		if err == nil { filename = fn; break }
+		if err == nil {
+			filename = fn
+			break
+		}
 	}
 	return filename, f
 }
+
 var defaultPhotoUri string
+
 func init() {
 	name, f := openPlayerPhoto("default")
 	if f != nil {
@@ -254,12 +263,14 @@ func getPlayerPhotoUri(name string) string {
 
 type teamList []string
 type playerData struct {
-	Name string `json:"name"`
+	Name     string `json:"name"`
 	PhotoUri string `json:"photoUri,omitempty"`
 }
+
 var currTeamsMu sync.Mutex
 var currTeams teamList
 var currPlayers map[string][]playerData
+
 func watchTeamsFile(c chan<- interface{}) *FileWatcher {
 	return WatchFile("teams.conf", func(f *os.File) {
 		if f == nil {
@@ -278,7 +289,9 @@ func watchTeamsFile(c chan<- interface{}) *FileWatcher {
 		var currTeamName string
 		for s.Scan() {
 			str := s.Text()
-			if len(str) == 0 { continue }
+			if len(str) == 0 {
+				continue
+			}
 			if str[0] == '\t' {
 				if currTeamName == "" {
 					fmt.Println("Invalid teams.conf: player data outside a team")
@@ -315,7 +328,8 @@ func startWebServer(dataSource <-chan interface{}) {
 			mixed <- v
 			// huge hack to have this here
 			switch dp, _ := v.(dataPoint); dp.winner {
-			case "": break
+			case "":
+				break
 			case "blue":
 				b, g := tracker.Scores()
 				tracker.SetScores(b+1, g)
@@ -346,60 +360,88 @@ func startWebServer(dataSource <-chan interface{}) {
 			// Doesn't handle ranges or set all of the headers of ServeContent,
 			// but ServeContent can't be used after setting a status code.
 			content, err = assets.FS.Open("/line_chart.html")
-			if err != nil { panic(err) }
+			if err != nil {
+				panic(err)
+			}
 			io.Copy(w, content)
 			return
 		}
-		if err != nil { panic(err) }
+		if err != nil {
+			panic(err)
+		}
 		var modtime time.Time
-		if info, err := content.Stat(); err != nil { modtime = info.ModTime() }
+		if info, err := content.Stat(); err != nil {
+			modtime = info.ModTime()
+		}
 		http.ServeContent(w, req, "index.html", modtime, content)
 	})
 	http.HandleFunc("/control/scores", func(w http.ResponseWriter, req *http.Request) {
 		// TODO: Serve the gzip-encoded form if available.
 		content, err := assets.FS.Open("/score_control.html")
-		if err != nil { panic(err) }
+		if err != nil {
+			panic(err)
+		}
 		var modtime time.Time
-		if info, err := content.Stat(); err != nil { modtime = info.ModTime() }
+		if info, err := content.Stat(); err != nil {
+			modtime = info.ModTime()
+		}
 		http.ServeContent(w, req, "score_control.html", modtime, content)
 	})
 	scoreboardTpl := requireTemplate("scoreboard", http.Dir("config"))
 	http.HandleFunc("/scoreboard", func(w http.ResponseWriter, rep *http.Request) {
 		err := scoreboardTpl.Execute(w, map[string]interface{}{"GoldOnLeft": false})
-		if err != nil { panic(err) }
+		if err != nil {
+			panic(err)
+		}
 	})
 	statsTpl := requireTemplate("stats", assets.FS)
 	http.HandleFunc("/stats", func(w http.ResponseWriter, rep *http.Request) {
 		err := statsTpl.Execute(w, nil)
-		if err != nil { panic(err) }
+		if err != nil {
+			panic(err)
+		}
 	})
 	statsboardTpl := requireTemplate("statsboard", assets.FS)
 	http.HandleFunc("/statsboard/", func(w http.ResponseWriter, req *http.Request) {
 		var side string
 		switch req.URL.Path {
-			case "/statsboard/blue", "/statsboard/blue/": side = "blue"
-			case "/statsboard/gold", "/statsboard/gold/": side = "gold"
-			default: panic(req.URL)
+		case "/statsboard/blue", "/statsboard/blue/":
+			side = "blue"
+		case "/statsboard/gold", "/statsboard/gold/":
+			side = "gold"
+		default:
+			panic(req.URL)
 		}
 		err := statsboardTpl.Execute(w, map[string]interface{}{"Side": side})
-		if err != nil { panic(err) }
+		if err != nil {
+			panic(err)
+		}
 	})
 	famineTpl := requireTemplate("famine", assets.FS)
 	http.HandleFunc("/famineTracker", func(w http.ResponseWriter, req *http.Request) {
 		err := famineTpl.Execute(w, nil)
-		if err != nil { panic(err) }
+		if err != nil {
+			panic(err)
+		}
 	})
 	teamPicsTpl := requireTemplate("team_pictures", assets.FS)
 	http.HandleFunc("/teamPictures", func(w http.ResponseWriter, req *http.Request) {
 		err := teamPicsTpl.Execute(w, map[string]interface{}{"GoldOnLeft": false, "DefaultPlayerPhoto": nil})
-		if err != nil { panic(err) }
+		if err != nil {
+			panic(err)
+		}
 	})
 	http.HandleFunc("/teamPictures/photo/", func(w http.ResponseWriter, req *http.Request) {
 		name, _ := url.PathUnescape(req.URL.EscapedPath()[20:])
 		fn, f := openPlayerPhoto(name)
-		if f == nil { http.NotFound(w, req); return }
+		if f == nil {
+			http.NotFound(w, req)
+			return
+		}
 		var modtime time.Time
-		if info, err := f.Stat(); err != nil { modtime = info.ModTime() }
+		if info, err := f.Stat(); err != nil {
+			modtime = info.ModTime()
+		}
 		http.ServeContent(w, req, fn, modtime, f)
 	})
 	var upgrader websocket.Upgrader
@@ -426,21 +468,41 @@ func startWebServer(dataSource <-chan interface{}) {
 				switch v := v.(type) {
 				case time.Time:
 					w, e := conn.NextWriter(websocket.TextMessage)
-					if e != nil { fmt.Println(e); break }
+					if e != nil {
+						fmt.Println(e)
+						break
+					}
 					timeBuff = v.AppendFormat(timeBuff[:0], time.RFC3339Nano)
 					_, e = fmt.Fprintf(w, "reset,%s,6", timeBuff)
 					ce := w.Close()
-					if e != nil { fmt.Println(e); break }
-					if ce != nil { fmt.Println(ce); break }
+					if e != nil {
+						fmt.Println(e)
+						break
+					}
+					if ce != nil {
+						fmt.Println(ce)
+						break
+					}
 				case dataPoint:
 					w, e := conn.NextWriter(websocket.TextMessage)
-					if e != nil { fmt.Println(e); break }
+					if e != nil {
+						fmt.Println(e)
+						break
+					}
 					timeBuff = v.when.AppendFormat(timeBuff[:0], time.RFC3339Nano)
 					_, e = fmt.Fprintf(w, "next,%s,%s", timeBuff, v.event)
-					for _, val := range v.vals { _, e = fmt.Fprintf(w, ",%v", val) }
+					for _, val := range v.vals {
+						_, e = fmt.Fprintf(w, ",%v", val)
+					}
 					ce := w.Close()
-					if e != nil { fmt.Println(e); break }
-					if ce != nil { fmt.Println(ce); break }
+					if e != nil {
+						fmt.Println(e)
+						break
+					}
+					if ce != nil {
+						fmt.Println(ce)
+						break
+					}
 				}
 			}
 			unreg <- &writeEnd
@@ -532,18 +594,24 @@ func startWebServer(dataSource <-chan interface{}) {
 					}
 				case "data":
 					m := data.(map[string]interface{})
-					if m["section"].(string) != "control" { break }
+					if m["section"].(string) != "control" {
+						break
+					}
 					for _, part := range m["parts"].([]interface{}) {
 						tag := part.(map[string]interface{})["tag"]
 						d := part.(map[string]interface{})["data"]
 						switch tag {
-						case "advanceMatch": tracker.AdvanceMatch()
+						case "advanceMatch":
+							tracker.AdvanceMatch()
 						case "reset":
 							for _, p := range d.([]interface{}) {
 								switch p {
-								case "matchSettings": tracker.SetVictoryRule(BestOfN(0))
-								case "currentTeams": tracker.SetCurrentTeams("", "")
-								case "currentScores": tracker.SetScores(0, 0)
+								case "matchSettings":
+									tracker.SetVictoryRule(BestOfN(0))
+								case "currentTeams":
+									tracker.SetCurrentTeams("", "")
+								case "currentScores":
+									tracker.SetScores(0, 0)
 								}
 							}
 						case "matchSettings":
@@ -559,7 +627,9 @@ func startWebServer(dataSource <-chan interface{}) {
 							case "StraightN":
 								rule = StraightN(vr.(map[string]interface{})["length"].(float64))
 							}
-							if rule == nil { break }
+							if rule == nil {
+								break
+							}
 							tracker.SetVictoryRule(rule)
 						case "currentTeams":
 							tracker.SetCurrentTeams(
@@ -589,9 +659,12 @@ func startWebServer(dataSource <-chan interface{}) {
 				select {
 				case v = <-c:
 				case s, ok := <-dataChan:
-					if !ok { break }
+					if !ok {
+						break
+					}
 					switch s {
-					case "prediction": doPredictions = true
+					case "prediction":
+						doPredictions = true
 					case "control":
 						doControl = true
 						// Send current state. Definitely a hack but it works for now.
@@ -628,32 +701,38 @@ func startWebServer(dataSource <-chan interface{}) {
 					continue
 				}
 				type dataPart struct {
-					Tag string `json:"tag"`
+					Tag  string      `json:"tag"`
 					Data interface{} `json:"data,omitempty"`
 				}
 				type packetData struct {
-					Section string `json:"section"`
-					Parts []dataPart `json:"parts"`
+					Section string     `json:"section"`
+					Parts   []dataPart `json:"parts"`
 				}
 				type packet struct {
 					// Assume the encoder processes fields in declared order.
-					Type string `json:"type"`
+					Type string     `json:"type"`
 					Data packetData `json:"data"`
 				}
 				p := packet{Type: "data"}
 				switch v := v.(type) {
 				case time.Time:
-					if !doPredictions { continue }
+					if !doPredictions {
+						continue
+					}
 					p.Data.Section = "prediction"
 					timeBuff = v.AppendFormat(timeBuff[:0], time.RFC3339Nano)
 					p.Data.Parts = []dataPart{{Tag: "reset", Data: string(timeBuff)}}
 				case dataPoint:
-					if !doPredictions { continue }
+					if !doPredictions {
+						continue
+					}
 					p.Data.Section = "prediction"
 					timeBuff = v.when.AppendFormat(timeBuff[:0], time.RFC3339Nano)
 					d := make(map[string]interface{})
 					d["time"] = string(timeBuff)
-					if v.event != "" { d["event"] = v.event }
+					if v.event != "" {
+						d["event"] = v.event
+					}
 					d["scores"] = v.vals
 					s := make(map[string]interface{})
 					s["stats"] = v.stats
@@ -664,7 +743,7 @@ func startWebServer(dataSource <-chan interface{}) {
 						s["winType"] = v.winType
 					}
 					p.Data.Parts = []dataPart{{Tag: "next", Data: d},
-											  {Tag: "stats", Data: s}}
+						{Tag: "stats", Data: s}}
 				case MatchVictoryRule:
 					var tag string
 					if doControl {
@@ -678,8 +757,8 @@ func startWebServer(dataSource <-chan interface{}) {
 					}
 					type ds struct {
 						VictoryRule struct {
-							Rule string `json:"rule"`
-							Length int `json:"length"`
+							Rule   string `json:"rule"`
+							Length int    `json:"length"`
 						} `json:"victoryRule"`
 					}
 					var d ds
@@ -712,40 +791,57 @@ func startWebServer(dataSource <-chan interface{}) {
 					s["blue"] = v.ScoreA
 					s["gold"] = v.ScoreB
 					p.Data.Parts = []dataPart{{Tag: teamTag, Data: t},
-											  {Tag: scoreTag, Data: s}}
+						{Tag: scoreTag, Data: s}}
 
 				case teamList:
-					if !doControl { continue }
+					if !doControl {
+						continue
+					}
 					p.Data.Section = "control"
 					p.Data.Parts = []dataPart{{Tag: "teamList", Data: v}}
 
 				case map[string][]playerData:
-					if !doTournamentData { continue }
+					if !doTournamentData {
+						continue
+					}
 					p.Data.Section = "tournamentData"
 					p.Data.Parts = []dataPart{{Tag: "teams", Data: v}}
 
 				case famineUpdate:
-					if !doFamineUpdates { continue }
+					if !doFamineUpdates {
+						continue
+					}
 					p.Data.Section = "famineTracker"
-					d := map[string]interface{} {
+					d := map[string]interface{}{
 						"berriesLeft": v.berriesLeft,
-						"inFamine": !v.famineStart.IsZero(),
+						"inFamine":    !v.famineStart.IsZero(),
 					}
 					if !v.famineStart.IsZero() {
 						dur := 3*time.Minute - v.currTime.Sub(v.famineStart)
-						if dur < 0 { dur = 0 }
+						if dur < 0 {
+							dur = 0
+						}
 						d["famineLeftSeconds"] = float64(dur) / float64(time.Second)
 					}
 					p.Data.Parts = []dataPart{{Tag: "update", Data: d}}
 				}
 				w, e := conn.NextWriter(websocket.TextMessage)
-				if e != nil { fmt.Println(e); break }
+				if e != nil {
+					fmt.Println(e)
+					break
+				}
 				enc := json.NewEncoder(w)
 				enc.SetEscapeHTML(false)
 				e = enc.Encode(p)
 				ce := w.Close()
-				if e != nil { fmt.Println(e); break }
-				if ce != nil { fmt.Println(ce); break }
+				if e != nil {
+					fmt.Println(e)
+					break
+				}
+				if ce != nil {
+					fmt.Println(ce)
+					break
+				}
 			}
 			unreg <- &writeEnd
 			conn.Close()
