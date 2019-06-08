@@ -1,0 +1,49 @@
+<!doctype html><html>
+<head>
+	<title>Killer Queen Score Controller</title>
+	<script src="/static/connection.js" async></script>
+	<script src="/static/score_control.js" async></script>
+</head>
+<body>
+<h1>Killer Queen Score Controller</h1>
+<form id="currentMatchForm"
+      matchsettings="true" matchteams="current" matchscores="current">
+	<label for="seriesLength">Series Length:</label>
+	<input name="seriesLength" id="seriesLength" />
+	<br />
+
+	<input type="button" class="setSeriesLengthButton" seriesLength="3" value="Bo3" />
+	<input type="button" class="setSeriesLengthButton" seriesLength="5" value="Bo5" />
+	<input type="button" class="setSeriesLengthButton" seriesLength="7" value="Bo7" />
+	<br />
+
+	<label for="blueTeam">Blue Team Name:</label>
+	<select name="blueTeam"><option value="">Other...</option></select>
+	<input name="blueTeam" id="blueTeamOther" />
+	<br />
+
+	<label for="goldTeam">Gold Team Name:</label>
+	<select name="goldTeam"><option value="">Other...</option></select>
+	<input name="goldTeam" id="goldTeamOther" />
+	<br />
+
+	<br />
+
+	<label for="blueScore">Blue Score:</label>
+	<input name="blueScore" value="0" />
+	<input type="button" class="clearScoreButton" side="blue" value="0" />
+	<input type="button" class="incrementScoreButton" side="blue" value="+1" />
+	<br />
+
+	<label for="goldScore">Gold Score:</label>
+	<input name="goldScore" value="0" />
+	<input type="button" class="clearScoreButton" side="gold" value="0" />
+	<input type="button" class="incrementScoreButton" side="gold" value="+1" />
+	<br />
+
+	<input type="submit" value="Update Scoreboard" />
+	<input type="button" class="finishMatchButton" value="Mark Match Complete" />
+	<hr />
+	<input type="reset" value="Reset Scoreboard" />
+</form>
+</body></html>

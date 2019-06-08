@@ -30,6 +30,8 @@ function Connection(section, handler_map) {
 	this.section = section;
 	this.handlers = handler_map;
 	Connection.addClient(this);
+
+	this.pendingParts = null;
 }
 Connection.debug = false;
 Connection.sock = null;
@@ -131,3 +133,24 @@ Connection.handleDataMessage = function(event, data) {
 		if (client.handlers['']) client.handlers['']();
 	}
 };
+
+Connection.prototype.send = function(tag, data) {
+	if (this.pendingParts === null) {
+		this.pendingParts = [];
+		var self = this;
+		setTimeout(function() {
+			Connection.send('data', {
+				section: self.section,
+				parts: self.pendingParts
+			});
+			self.pendingParts = null;
+		});
+	}
+	this.pendingParts.push({
+		tag: tag,
+		data: data
+	});
+}
+Connection.prototype.setHandler = function(tag, handler) {
+	this.handlers[tag] = handler;
+}
