@@ -1275,30 +1275,22 @@ func main() {
 	go startWebServer(broadcast)
 	<-time.After(5 * time.Second)
 	webStartTime, _ := time.Parse(time.RFC3339Nano, "2018-10-20T18:39:49.376-05:00")
-	t := webStartTime
 
 	var e error
-	var strReader kqio.MessageStringReader
-	var closer = func() {}
+	cabAddress := "ws://kq.local:12749"
 	if len(os.Args) >= 2 && len(os.Args[1]) > 0 {
-		autoconn := &autoConnector{nil, func() (*kqio.CabConnection, error) {
-			fmt.Fprintln(logOut, "Attempting to connect to", os.Args[1])
-			return kqio.Connect(os.Args[1])
-		}}
-		replayLog, e = os.Create("out.log")
-		if e != nil {
-			panic(e)
-		}
-		strReader = &teeReader{autoconn, kqio.NewMessageStringWriter(replayLog)}
-		closer = func() { fmt.Fprintln(logOut, "Disconnecting"); autoconn.Close() }
-	} else {
-		f, e := os.Open("../libkq/examples/BB3/red.logs-1540028543.54784.log")
-		if e != nil {
-			panic(e)
-		}
-		strReader = kqio.NewMessageStringReader(f)
+		cabAddress = os.Args[1]
 	}
-	defer closer()
+	autoconn := &autoConnector{nil, func() (*kqio.CabConnection, error) {
+		fmt.Fprintln(logOut, "Attempting to connect to", cabAddress)
+		return kqio.Connect(cabAddress)
+	}}
+	replayLog, e = os.Create("out.log")
+	if e != nil {
+		panic(e)
+	}
+	var strReader kqio.MessageStringReader = &teeReader{autoconn, kqio.NewMessageStringWriter(replayLog)}
+	defer func() { fmt.Fprintln(logOut, "Disconnecting"); autoconn.Close() }()
 	score := modelSumLose
 	scorers := [...]func(*kq.GameState, time.Time) float64{modelSumLose, modelMultLose, modelMultCbrt, modelMultSqrt, modelMultQueenSqrt}
 	if len(os.Args) >= 3 {
@@ -1378,7 +1370,6 @@ func main() {
 					int((s-0.5)*200),
 					int(s*80)-39, "|")
 			}
-			t = msg.Time
 		}
 
 		if state.InGame() {
@@ -1389,24 +1380,4 @@ func main() {
 		}
 	}
 	rateLimitTicker.Stop()
-
-	_ = t
-/*
-	s := 0.5
-	i := 0
-	for _ = range time.Tick(time.Second) {
-		t = t.Add(time.Second)
-		if i % 20 == 0 { broadcast <- t }
-		i++
-		broadcast <- dataPoint{t, s}
-		r := rand.Float64() * 1.1 - 0.6 // Even over range [-0.6, 0.5).
-		if s < 0.5 {
-			s -= r * s
-		} else if s > 0.5 {
-			s += r * (1 - s)
-		} else {
-			s += r / 2
-		}
-	}
-*/
 }
