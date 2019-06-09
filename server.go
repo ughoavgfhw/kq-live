@@ -648,6 +648,10 @@ func startWebServer(dataSource <-chan interface{}) {
 		var writeEnd chan<- interface{} = c
 		reg <- &writeEnd
 		go func() {
+			defer func() {
+				unreg <- &writeEnd
+				conn.Close()
+			}()
 			var timeBuff []byte
 			doPredictions := false
 			doControl := false
@@ -660,7 +664,7 @@ func startWebServer(dataSource <-chan interface{}) {
 				case v = <-c:
 				case s, ok := <-dataChan:
 					if !ok {
-						break
+						return
 					}
 					switch s {
 					case "prediction":
@@ -843,8 +847,6 @@ func startWebServer(dataSource <-chan interface{}) {
 					break
 				}
 			}
-			unreg <- &writeEnd
-			conn.Close()
 		}()
 	})
 	panic(http.ListenAndServe(":8080", nil))
