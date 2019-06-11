@@ -44,6 +44,7 @@ type dataPoint struct {
 	event string
 
 	stats               []playerStat
+	status              []struct{ Speed, Warrior bool }
 	mp, winner, winType string
 	dur                 time.Duration
 }
@@ -740,6 +741,7 @@ func startWebServer(dataSource <-chan interface{}) {
 					d["scores"] = v.vals
 					s := make(map[string]interface{})
 					s["stats"] = v.stats
+					s["status"] = v.status
 					s["map"] = v.mp
 					s["duration"] = v.dur
 					if v.winner != "" {

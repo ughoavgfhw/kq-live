@@ -1,17 +1,44 @@
 {{define "JS" -}}
 	function StatsboardCell(root) {
+		this.splitWarrior = window.location.search == '?kills=split';
+
 		this.root = root;
+		if (this.splitWarrior) {
+			var l = document.createElement('div');
+			l.className = 'killLabel';
+			root.appendChild(l);
+		}
+		this.milKills = document.createElement('div');
+		this.milKills.className = 'military kills';
+		root.appendChild(this.milKills);
 		this.kills = document.createElement('div');
 		this.kills.className = 'kills';
 		root.appendChild(this.kills);
 		this.deaths = document.createElement('div');
 		this.deaths.className = 'deaths';
 		root.appendChild(this.deaths);
+		this.status = document.createElement('div');
+		this.status.className = 'statusIcon';
+		root.appendChild(this.status);
 	}
 	StatsboardCell.prototype.update = function(stats) {
-		this.kills.innerText = '' + stats.Kills + '+' + stats.Assists;
+		if (this.splitWarrior) {
+			var k = stats.Kills - stats.DroneKills;
+			if (Number.isNaN(k)) console.error(stats);
+			this.milKills.innerText = '' + k;
+			this.kills.innerText = '' + stats.DroneKills;
+		} else {
+			this.milKills.innerText = '' + stats.Kills;
+			this.kills.innerText = '' + stats.Assists;
+		}
 		this.deaths.innerText = '' + stats.Deaths;
 		this.root.setAttribute('statsboardqueenkills', stats.QueenKills);
+	}
+	StatsboardCell.prototype.setStatus = function(status) {
+		var st = (status.Speed && status.Warrior) ? 'sw' :
+					status.Speed ? 's' :
+					status.Warrior ? 'w' : '';
+		this.status.setAttribute('statsboardstatus', st);
 	}
 	function Statsboard(root, side) {
 		this.side = side;
@@ -33,9 +60,10 @@
 		this.reset();
 	}
 	Statsboard.prototype.reset = function() {
-		var stats = {Kills: 0, Assists: 0, Deaths: 0, QueenKills: 0};
+		var stats = {Kills: 0, DroneKills: 0, Assists: 0, Deaths: 0, QueenKills: 0};
 		for (var i = 0; i < 5; ++i) {
 			this.cells[i].update(stats);
+			this.cells[i].setStatus({});
 		}
 	};
 	Statsboard.prototype.update = function(data) {
@@ -46,6 +74,7 @@
 		}
 		for (var i = 0; i < 5; ++i) {
 			this.cells[i].update(data.stats[positions[i]]);
+			this.cells[i].setStatus(data.status[positions[i]]);
 		}
 	};
 {{- end}}
@@ -68,8 +97,7 @@ new Statsboard(document.getElementById('statsboard{{.Side}}'), {{.Side}});
 		width: 83px;
 		height: 64px;
 		margin: 10px 40px 0 40px;
-		text-align: center;
-		font-size: 30pt;
+		font-size: 30px;
 		color: white;
 		{{/* Triple shadow to make it darker. */ -}}
 		text-shadow: 0 0 0.2em black, 0 0 0.2em black, 0 0 0.2em black;
@@ -82,17 +110,38 @@ new Statsboard(document.getElementById('statsboard{{.Side}}'), {{.Side}});
 	.statsboardCell .kills, .statsboardCell .deaths {
 		display: inline-block;
 		position: absolute;
-		bottom: 0;
-		min-width: 2ch;
+		top: 1em;
 	}
-	.statsboardCell .kills { right: 53px; }
-	.statsboardCell .deaths { left: 53px; }
+	.statsboardCell .kills { left: -1ch; }
+	.statsboardCell .military.kills { top: 0; }
+	.statsboardCell .deaths { right: -1ch; }
+	.statsboardCell .killLabel, .statsboardCell .statusIcon {
+		position: absolute;
+		display: inline-block;
+		background-image: url("{{assetUri "/statsboard_sprites.png"}}");
+		background-size: auto 96px;
+		width: 40px;
+	}
+	.statsboardCell .killLabel {
+		height: 64px;
+		background-position-x: -80px;
+		left: -40px;
+	}
+	.statsboardCell .statusIcon {
+		height: 32px;
+		background-position: -40px -32px;
+		right: 0;
+	}
+	.statsboardCell .statusIcon[statsboardstatus="s"] { background-position-y: -64px; }
+	.statsboardCell .statusIcon[statsboardstatus="w"] { background-position: 0 0; }
+	.statsboardCell .statusIcon[statsboardstatus="sw"] { background-position-y: 0; }
 	[statsboardqueenkills]::before {
 		display: block;
 		position: absolute;
 		bottom: 53px;
 		left: 11px;
 		right: 0;
+		text-align: center;
 	}
 	{{/* Note: If assetUri chose to embed the crown, it would be effectively loaded 6 times. To avoid this, they are directly linked via /static/. */ -}}
 	[statsboardqueenkills="1"]::before {

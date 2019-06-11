@@ -1353,6 +1353,12 @@ func main() {
 					dp.vals = append(dp.vals, scorer(state, msg.Time))
 				}
 				dp.stats = playerStats[:]
+				for i := 0; i < NumPlayers; i++ {
+					dp.status = append(dp.status, struct{ Speed, Warrior bool }{
+						Speed:   state.Players[i].HasSpeed,
+						Warrior: state.Players[i].Type == Warrior,
+					})
+				}
 				dp.mp = state.Map.String()
 				dp.dur = msg.Time.Sub(state.Start)
 				if msg.Type == "victory" {
