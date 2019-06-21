@@ -125,7 +125,8 @@ new Statsboard(document.getElementById('statsboard{{.Side}}'), {{.Side}});
 	.statsboardCell .killLabel {
 		height: 64px;
 		background-position-x: -80px;
-		left: -40px;
+		left: -52px;
+		left: calc(-40px - 1ch);
 	}
 	.statsboardCell .statusIcon {
 		height: 32px;
@@ -138,10 +139,12 @@ new Statsboard(document.getElementById('statsboard{{.Side}}'), {{.Side}});
 	[statsboardqueenkills]::before {
 		display: block;
 		position: absolute;
-		bottom: 53px;
+		bottom: 64px;
 		left: 11px;
 		right: 0;
 		text-align: center;
+		{{/* Avoids vertical movement due to spaces between images. */ -}}
+		line-height: 0;
 	}
 	{{/* Note: If assetUri chose to embed the crown, it would be effectively loaded 6 times. To avoid this, they are directly linked via /static/. */ -}}
 	[statsboardqueenkills="1"]::before {
