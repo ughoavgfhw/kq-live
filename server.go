@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -266,6 +267,8 @@ type teamList []string
 type playerData struct {
 	Name     string `json:"name"`
 	PhotoUri string `json:"photoUri,omitempty"`
+	Pronouns string `json:"pronouns,omitempty"`
+	Scene    string `json:"scene,omitempty"`
 }
 
 var currTeamsMu sync.Mutex
@@ -297,7 +300,19 @@ func watchTeamsFile(c chan<- interface{}) *FileWatcher {
 				if currTeamName == "" {
 					fmt.Println("Invalid teams.conf: player data outside a team")
 				} else {
-					players[currTeamName] = append(players[currTeamName], playerData{Name: str[1:], PhotoUri: getPlayerPhotoUri(str[1:])})
+					var pd playerData
+					switch parts := strings.Split(str[1:], ","); true {
+					case len(parts) >= 3:
+						pd.Pronouns = parts[2]
+						fallthrough
+					case len(parts) == 2:
+						pd.Scene = parts[1]
+						fallthrough
+					default:
+						pd.Name = parts[0]
+						pd.PhotoUri = getPlayerPhotoUri(parts[0])
+					}
+					players[currTeamName] = append(players[currTeamName], pd)
 				}
 			} else {
 				teams = append(teams, str)
@@ -428,6 +443,20 @@ func startWebServer(dataSource <-chan interface{}) {
 	teamPicsTpl := requireTemplate("team_pictures", assets.FS)
 	http.HandleFunc("/teamPictures", func(w http.ResponseWriter, req *http.Request) {
 		err := teamPicsTpl.Execute(w, map[string]interface{}{"GoldOnLeft": false, "DefaultPlayerPhoto": nil})
+		if err != nil {
+			panic(err)
+		}
+	})
+	postGameStatsTpl := requireTemplate("post_game_stats", assets.FS)
+	http.HandleFunc("/postGameStats", func(w http.ResponseWriter, req *http.Request) {
+		err := postGameStatsTpl.Execute(w, map[string]interface{}{"GoldOnLeft": false})
+		if err != nil {
+			panic(err)
+		}
+	})
+	statusTpl := requireTemplate("status", assets.FS)
+	http.HandleFunc("/status", func(w http.ResponseWriter, req *http.Request) {
+		err := statusTpl.Execute(w, map[string]interface{}{"GoldOnLeft": false, "DefaultPlayerPhoto": nil})
 		if err != nil {
 			panic(err)
 		}
@@ -823,7 +852,7 @@ func startWebServer(dataSource <-chan interface{}) {
 						"inFamine":    !v.famineStart.IsZero(),
 					}
 					if !v.famineStart.IsZero() {
-						dur := 3*time.Minute - v.currTime.Sub(v.famineStart)
+						dur := 90*time.Second - v.currTime.Sub(v.famineStart)
 						if dur < 0 {
 							dur = 0
 						}

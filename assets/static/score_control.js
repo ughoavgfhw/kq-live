@@ -132,7 +132,20 @@ ScoreController.prototype.sendReset = function() {
 	}
 }
 ScoreController.prototype.finishMatch = function() {
-	this.conn.send('advanceMatch');
+	if (this.matchTeams !== null) {
+		var data = {
+			gold: this.blueTeamSelect.value || this.blueTeamOther.value,
+			blue: this.goldTeamSelect.value || this.goldTeamOther.value
+		};
+		this.conn.send(this.matchTeams + 'Teams', data);
+	}
+	if (this.matchScores !== null) {
+		var data = {
+			gold: parseInt(this.blueScore.value, 10) || 0,
+			blue: parseInt(this.goldScore.value, 10) || 0
+		};
+		this.conn.send(this.matchScores + 'Scores', data);
+	}
 }
 
 ScoreController.prototype.updateTeamList = function(teams) {

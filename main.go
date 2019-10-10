@@ -406,7 +406,7 @@ const (
 
 	objectiveBonusFactorAtFullMil = 0.5
 	faminePeakWarriorWeightFactor = 2.5
-	famineDuration                = 3 * time.Minute
+	famineDuration                = 90 * time.Second
 
 	winPointsWeight, losePointsWeight = 1, 1
 )
@@ -1072,6 +1072,119 @@ func (ac *autoConnector) Close() error {
 	return err
 }
 
+type delayed struct {
+	*autoConnector
+	input chan struct{ msg *kqio.MessageString; err error }
+	stop  chan struct{}
+}
+func (d *delayed) ReadMessageString(out *kqio.MessageString) error {
+	data, ok := <-d.input
+	if !ok {
+		return fmt.Errorf("Attempting to read from closed delayed connection")
+	}
+	if data.msg != nil {
+		*out = *data.msg
+	}
+	return data.err
+}
+func (d *delayed) Close() error {
+	close(d.stop)
+	for gotMsg := true; gotMsg; _, gotMsg = <-d.input {}
+	return d.autoConnector.Close()
+}
+
+func (d *delayed) reader(delayAmount time.Duration) {
+	defer close(d.input)
+
+	type node struct {
+		msg *kqio.MessageString
+		err error
+		offset time.Duration
+		next *node
+	}
+	inputs := make(chan *node)
+
+	go func() {
+		defer close(inputs)
+		var last time.Time
+		for {
+			select {
+			case <-d.stop:
+				return
+			default:
+			}
+
+			msg := &kqio.MessageString{}
+			err := d.autoConnector.ReadMessageString(msg)
+			n := &node{}
+			n.msg = msg
+			n.err = err
+			if !last.IsZero() {
+				n.offset = msg.Time.Sub(last)
+			}
+			last = msg.Time
+			inputs <- n
+			if err == io.EOF {
+				return
+			}
+		}
+	}()
+
+	var head, end *node
+	if n, ok := <-inputs; ok {
+		head = n
+		end = n
+	} else {
+		return
+	}
+	timer := time.NewTimer(delayAmount)
+	output := func() {
+		n := head
+		head = head.next
+		if head != nil {
+			timer.Reset(head.offset)
+		}
+		d.input <- struct{ msg *kqio.MessageString; err error }{ n.msg, n.err }
+	}
+	for {
+		select {
+		case n, ok := <-inputs:
+			if !ok {
+				for head != nil {
+					select {
+					case <-d.stop:
+						head = nil
+						if !timer.Stop() {
+							<-timer.C
+						}
+					case <-timer.C:
+						output()
+					}
+				}
+				return
+			}
+			end.next = n
+			end = n
+			if head == nil {
+				head = n
+				timer.Reset(delayAmount)
+			}
+		case <-timer.C:
+			output()
+		}
+	}
+}
+
+func delay(ac *autoConnector, amount time.Duration) *delayed {
+	d := &delayed{
+		ac,
+		make(chan struct{ msg *kqio.MessageString; err error }),
+	    make(chan struct{}),
+	}
+	go d.reader(amount)
+	return d
+}
+
 type teeReader struct {
 	kqio.MessageStringReadWriteCloser
 	w kqio.MessageStringWriter
@@ -1281,11 +1394,11 @@ func main() {
 	if len(os.Args) >= 2 && len(os.Args[1]) > 0 {
 		cabAddress = os.Args[1]
 	}
-	autoconn := &autoConnector{nil, func() (*kqio.CabConnection, error) {
+	autoconn := delay(&autoConnector{nil, func() (*kqio.CabConnection, error) {
 		fmt.Fprintln(logOut, "Attempting to connect to", cabAddress)
 		return kqio.Connect(cabAddress)
-	}}
-	replayLog, e = os.Create("out.log")
+	}}, 500*time.Millisecond)
+	replayLog, e = os.Create(fmt.Sprint("out", time.Now().Format("2006-01-02T15-04-05-0700"), ".log"))
 	if e != nil {
 		panic(e)
 	}
