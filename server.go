@@ -336,7 +336,7 @@ func watchTeamsFile(c chan<- interface{}) *FileWatcher {
 	})
 }
 
-func startWebServer(dataSource <-chan interface{}) {
+func startWebServer(bindAddr string, dataSource <-chan interface{}) {
 	mixed := make(chan interface{})
 	tracker := startGameTracker(mixed)
 	go func() {
@@ -880,5 +880,5 @@ func startWebServer(dataSource <-chan interface{}) {
 			}
 		}()
 	})
-	panic(http.ListenAndServe(":8080", nil))
+	panic(http.ListenAndServe(bindAddr, nil))
 }

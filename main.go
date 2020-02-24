@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -1383,16 +1384,20 @@ func updateStats(msg *kqio.Message, state *kq.GameState) {
 	}
 }
 
+var port = flag.Int("port", 8080, "the port number to listen on")
+var model = flag.String("model", "sumLose", "the name of the model to use for predictions")
 func main() {
+	flag.Parse()
 	broadcast := make(chan interface{})
-	go startWebServer(broadcast)
+	go startWebServer(fmt.Sprintf(":%d", *port), broadcast)
 	<-time.After(5 * time.Second)
 	webStartTime, _ := time.Parse(time.RFC3339Nano, "2018-10-20T18:39:49.376-05:00")
 
 	var e error
 	cabAddress := "ws://kq.local:12749"
-	if len(os.Args) >= 2 && len(os.Args[1]) > 0 {
-		cabAddress = os.Args[1]
+	args := flag.Args()
+	if len(args) >= 1 && len(args[0]) > 0 {
+		cabAddress = args[0]
 	}
 	autoconn := delay(&autoConnector{nil, func() (*kqio.CabConnection, error) {
 		fmt.Fprintln(logOut, "Attempting to connect to", cabAddress)
@@ -1406,21 +1411,19 @@ func main() {
 	defer func() { fmt.Fprintln(logOut, "Disconnecting"); autoconn.Close() }()
 	score := modelSumLose
 	scorers := [...]func(*kq.GameState, time.Time) float64{modelSumLose, modelMultLose, modelMultCbrt, modelMultSqrt, modelMultQueenSqrt}
-	if len(os.Args) >= 3 {
-		switch os.Args[2] {
-		case "--model=sumLose":
-			score = modelSumLose
-		case "--model=multLose":
-			score = modelMultLose
-		case "--model=multCbrt":
-			score = modelMultCbrt
-		case "--model=multSqrt":
-			score = modelMultSqrt
-		case "--model=multQSqrt":
-			score = modelMultQueenSqrt
-		default:
-			panic(fmt.Sprintf("Unknown argument %v", os.Args[2]))
-		}
+	switch *model {
+	case "sumLose":
+		score = modelSumLose
+	case "multLose":
+		score = modelMultLose
+	case "multCbrt":
+		score = modelMultCbrt
+	case "multSqrt":
+		score = modelMultSqrt
+	case "multQSqrt":
+		score = modelMultQueenSqrt
+	default:
+		panic(fmt.Sprintf("Unknown model %v", *model))
 	}
 	reader := kq.NewCabinet(strReader)
 	var msg kqio.Message
