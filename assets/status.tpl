@@ -5,7 +5,8 @@ function TeamPicsPlayerPhoto(root) {
 	this.img.src = TeamPicsPlayerPhoto.defaultUri;
 }
 TeamPicsPlayerPhoto.prototype.update = function(player) {
-	this.name.innerText = player.name || '';
+	this.name.innerText =
+		[player.name || '', player.scene || '', player.pronouns || ''].join(' ');
 	this.img.src = player.photoUri || TeamPicsPlayerPhoto.defaultUri;
 }
 
@@ -60,67 +61,21 @@ new Connection('tournamentData', {
 {{- end}}
 
 {{define "CSS" -}}
-.teamPics {
-	width: 1920px;
-	height: 540px;
-	margin: 0;
-}
-.teamPicsName {
-	font-size: 54px;
-	line-height: 54px;
-	height: 54px;
-	font-family: "Vermin Vibes 1989"
-}
-.teamPics.left .teamPicsName {
-	position: relative;
-	top: 450px;
-	text-align: right;
-	padding-right: 975px;
-}
-.teamPics.right .teamPicsName {
-	text-align: left;
-	padding-left: 975px;
-}
+.teamPicsName { font-size: 2em; }
 .playerPic {
-	display: inline-block;
-	width: 364px;
-	height: 453px;
-	margin: 3px 10px;
-	vertical-align: top;
-}
-.teamPics.left .playerPic {
-	position: relative;
-	top: -54px;
+	display: inline-flex;
+	flex-direction: column;
+	padding: 1em;
+	padding-top: 0;
 }
 .playerPic img {
-	border: solid 4px;
-	width: 356px;
-	height: 356px;
-	border-radius: 8px;
-	object-fit: contain;
-	background-color: rgba(0, 0, 0, 0.5);
-}
-.blue .playerPic img { border-color: rgb(50, 180, 255); }
-.gold .playerPic img { border-color: rgb(255, 180, 0); }
-.playerPicName {
-	display: block;
-	font-size: 30px;
-	text-align: center;
-}
-#teamPicsVsText {
-	position: absolute;
-	top: 495px;
-	left: 750px;
-	width: 420px;
-	text-align: center;
-	font-size: 54px;
-	line-height: 54px;
-	font-family: "Vermin Vibes 1989"
+	width: 144px;
+	height: 144px;
 }
 {{- end}}
 
 {{define "Head" -}}
-	<title>kq-live team pictures</title>
+	<title>kq-live status</title>
 	<script async>{{template "JS"}}
 	window.addEventListener("load", function() {
 		{{- template "JS_init" . -}}
@@ -145,7 +100,6 @@ new Connection('tournamentData', {
 <div id="teamPics_{{$leftTeam}}" class="teamPics left {{$leftTeam}}">
 	{{- template "TeamPics_OneTeam" -}}
 </div>
-<div id="teamPicsVsText">vs</div>
 <div id="teamPics_{{$rightTeam}}" class="teamPics right {{$rightTeam}}">
 	{{- template "TeamPics_OneTeam" -}}
 </div>

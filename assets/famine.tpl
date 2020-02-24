@@ -1,35 +1,20 @@
 {{define "JS" -}}
 	function FamineTracker(root) {
-		this.line1 = document.createTextNode('');
-		this.line2 = document.createTextNode('');
-		root.appendChild(this.line1);
-		root.appendChild(document.createElement('br'));
-		root.appendChild(this.line2);
-
+		this.text = root.firstElementChild.nextElementSibling;
 		if (window.location.hash == '#layouttest') {
-			this.line1.textContent = '10 berries left';
-			this.line2.textContent = 'Respawn incoming';
+			this.text.innerText = '0:00';
 		}
 
 		var self = this;
 		this.conn = new Connection('famineTracker', {
 			update: function(data) {
 				if (data.inFamine) {
-					self.line1.textContent = 'FAMINE';
-					if (data.famineLeftSeconds <= 10) {
-						self.line2.textContent = 'Respawn incoming';
-					} else {
-						self.line2.textContent = '';
-					}
-				} else if (data.berriesLeft == 1) {
-					self.line1.textContent = '';
-					self.line2.textContent = '1 berry left';
-				} else if (data.berriesLeft <= 12) {
-					self.line1.textContent = '';
-					self.line2.textContent = data.berriesLeft + ' berries left';
+					var m = Math.floor(data.famineLeftSeconds / 60);
+					var s = Math.floor(data.famineLeftSeconds % 60);
+					if (s < 10) s = '0' + s;
+					self.text.innerText = m + ':' + s;
 				} else {
-					self.line1.textContent = '';
-					self.line2.textContent = '';
+					self.text.innerText = data.berriesLeft;
 				}
 			}
 		});
@@ -40,7 +25,7 @@ new FamineTracker(document.getElementById('famineTracker'));
 {{- end}}
 
 {{define "CSS" -}}
-#famineTracker { text-align: center; }
+#famineTracker span { vertical-align: top; font-size: 60px; }
 {{- end}}
 
 {{define "Head" -}}
@@ -53,5 +38,8 @@ new FamineTracker(document.getElementById('famineTracker'));
 {{- end}}
 
 {{define "Body" -}}
-<div id="famineTracker"></div>
+<div id="famineTracker">
+	 <img src="{{assetUri "/single_berry.png"}}" />
+	 <span></span>
+</div>
 {{- end}}

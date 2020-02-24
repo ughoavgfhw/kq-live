@@ -45,10 +45,10 @@ function ScoreController(form, conn) {
 			score.value = 1 + (parseInt(score.value, 10) || 0);
 		});
 	}
-	buttons = form.getElementsByClassName('finishMatchButton');
+	buttons = form.getElementsByClassName('swapSidesButton');
 	for (var b of buttons) {
 		b.addEventListener('click', function() {
-			self.finishMatch();
+			self.swapTeamSides();
 		});
 	}
 
@@ -131,8 +131,21 @@ ScoreController.prototype.sendReset = function() {
 		this.conn.send('reset', parts);
 	}
 }
-ScoreController.prototype.finishMatch = function() {
-	this.conn.send('advanceMatch');
+ScoreController.prototype.swapTeamSides = function() {
+	if (this.matchTeams !== null) {
+		var data = {
+			gold: this.blueTeamSelect.value || this.blueTeamOther.value,
+			blue: this.goldTeamSelect.value || this.goldTeamOther.value
+		};
+		this.conn.send(this.matchTeams + 'Teams', data);
+	}
+	if (this.matchScores !== null) {
+		var data = {
+			gold: parseInt(this.blueScore.value, 10) || 0,
+			blue: parseInt(this.goldScore.value, 10) || 0
+		};
+		this.conn.send(this.matchScores + 'Scores', data);
+	}
 }
 
 ScoreController.prototype.updateTeamList = function(teams) {
