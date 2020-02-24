@@ -336,6 +336,128 @@ func watchTeamsFile(c chan<- interface{}) *FileWatcher {
 	})
 }
 
+func handleWSIncoming(r io.Reader, dataChan chan<- string, tracker gameTracker) {
+	dec := json.NewDecoder(r)
+	dec.DisallowUnknownFields()
+	var tok json.Token
+	var err error
+	// TODO: Send back an error on parse error, handle inputs.
+	if tok, err = dec.Token(); err != nil {
+		fmt.Println("failed to parse message;", err)
+		return
+	} else if v, ok := tok.(json.Delim); !ok {
+		fmt.Println("failed to parse message;", err)
+		return
+	} else if v != '{' {
+		fmt.Println("failed to parse message;", err)
+		return
+	}
+	if tok, err = dec.Token(); err != nil {
+		fmt.Println("failed to parse message;", err)
+		return
+	} else if v, ok := tok.(string); !ok {
+		fmt.Println("failed to parse message;", err)
+		return
+	} else if v != "type" {
+		fmt.Println("failed to parse message;", err)
+		return
+	}
+	var typ string
+	if tok, err = dec.Token(); err != nil {
+		fmt.Println("failed to parse message;", err)
+		return
+	} else if v, ok := tok.(string); !ok {
+		fmt.Println("failed to parse message;", err)
+		return
+	} else {
+		typ = v
+	}
+	if tok, err = dec.Token(); err != nil {
+		fmt.Println("failed to parse message;", err)
+		return
+	} else if v, ok := tok.(string); !ok {
+		fmt.Println("failed to parse message;", err)
+		return
+	} else if v != "data" {
+		fmt.Println("failed to parse message;", err)
+		return
+	}
+	// TODO: Parse an expected structure based on type.
+	var data interface{}
+	if err = dec.Decode(&data); err != nil {
+		fmt.Println("failed to parse message;", err)
+		return
+	}
+	if tok, err = dec.Token(); err != nil {
+		fmt.Println("failed to parse message;", err)
+		return
+	} else if v, ok := tok.(json.Delim); !ok {
+		fmt.Println("failed to parse message;", err)
+		return
+	} else if v != '}' {
+		fmt.Println("failed to parse message;", err)
+		return
+	}
+	if tok, err = dec.Token(); err != io.EOF {
+		fmt.Println("failed to parse message; expected EOF; got", tok)
+	}
+	switch typ {
+	case "client_start":
+		for _, v := range data.(map[string]interface{})["sections"].([]interface{}) {
+			dataChan <- v.(string)
+		}
+	case "data":
+		m := data.(map[string]interface{})
+		if m["section"].(string) != "control" {
+			break
+		}
+		for _, part := range m["parts"].([]interface{}) {
+			tag := part.(map[string]interface{})["tag"]
+			d := part.(map[string]interface{})["data"]
+			switch tag {
+			case "advanceMatch":
+				tracker.AdvanceMatch()
+			case "reset":
+				for _, p := range d.([]interface{}) {
+					switch p {
+					case "matchSettings":
+						tracker.SetVictoryRule(BestOfN(0))
+					case "currentTeams":
+						tracker.SetCurrentTeams("", "")
+					case "currentScores":
+						tracker.SetScores(0, 0)
+					}
+				}
+			case "matchSettings":
+				vr := d.(map[string]interface{})["victoryRule"]
+				if vr == nil {
+					tracker.SetVictoryRule(BestOfN(0))
+					break
+				}
+				var rule MatchVictoryRule
+				switch vr.(map[string]interface{})["rule"] {
+				case "BestOfN":
+					rule = BestOfN(vr.(map[string]interface{})["length"].(float64))
+				case "StraightN":
+					rule = StraightN(vr.(map[string]interface{})["length"].(float64))
+				}
+				if rule == nil {
+					break
+				}
+				tracker.SetVictoryRule(rule)
+			case "currentTeams":
+				tracker.SetCurrentTeams(
+					d.(map[string]interface{})["blue"].(string),
+					d.(map[string]interface{})["gold"].(string))
+			case "currentScores":
+				tracker.SetScores(
+					int(d.(map[string]interface{})["blue"].(float64)),
+					int(d.(map[string]interface{})["gold"].(float64)))
+			}
+		}
+	}
+}
+
 func startWebServer(bindAddr string, dataSource <-chan interface{}) {
 	mixed := make(chan interface{})
 	tracker := startGameTracker(mixed)
@@ -554,124 +676,7 @@ func startWebServer(bindAddr string, dataSource <-chan interface{}) {
 					close(dataChan)
 					break
 				}
-				dec := json.NewDecoder(r)
-				dec.DisallowUnknownFields()
-				var tok json.Token
-				// TODO: Send back an error on parse error, handle inputs.
-				if tok, err = dec.Token(); err != nil {
-					fmt.Println("failed to parse message;", err)
-					continue
-				} else if v, ok := tok.(json.Delim); !ok {
-					fmt.Println("failed to parse message;", err)
-					continue
-				} else if v != '{' {
-					fmt.Println("failed to parse message;", err)
-					continue
-				}
-				if tok, err = dec.Token(); err != nil {
-					fmt.Println("failed to parse message;", err)
-					continue
-				} else if v, ok := tok.(string); !ok {
-					fmt.Println("failed to parse message;", err)
-					continue
-				} else if v != "type" {
-					fmt.Println("failed to parse message;", err)
-					continue
-				}
-				var typ string
-				if tok, err = dec.Token(); err != nil {
-					fmt.Println("failed to parse message;", err)
-					continue
-				} else if v, ok := tok.(string); !ok {
-					fmt.Println("failed to parse message;", err)
-					continue
-				} else {
-					typ = v
-				}
-				if tok, err = dec.Token(); err != nil {
-					fmt.Println("failed to parse message;", err)
-					continue
-				} else if v, ok := tok.(string); !ok {
-					fmt.Println("failed to parse message;", err)
-					continue
-				} else if v != "data" {
-					fmt.Println("failed to parse message;", err)
-					continue
-				}
-				// TODO: Parse an expected structure based on type.
-				var data interface{}
-				if err = dec.Decode(&data); err != nil {
-					fmt.Println("failed to parse message;", err)
-					continue
-				}
-				if tok, err = dec.Token(); err != nil {
-					fmt.Println("failed to parse message;", err)
-					continue
-				} else if v, ok := tok.(json.Delim); !ok {
-					fmt.Println("failed to parse message;", err)
-					continue
-				} else if v != '}' {
-					fmt.Println("failed to parse message;", err)
-					continue
-				}
-				if tok, err = dec.Token(); err != io.EOF {
-					fmt.Println("failed to parse message; expected EOF; got", tok)
-				}
-				switch typ {
-				case "client_start":
-					for _, v := range data.(map[string]interface{})["sections"].([]interface{}) {
-						dataChan <- v.(string)
-					}
-				case "data":
-					m := data.(map[string]interface{})
-					if m["section"].(string) != "control" {
-						break
-					}
-					for _, part := range m["parts"].([]interface{}) {
-						tag := part.(map[string]interface{})["tag"]
-						d := part.(map[string]interface{})["data"]
-						switch tag {
-						case "advanceMatch":
-							tracker.AdvanceMatch()
-						case "reset":
-							for _, p := range d.([]interface{}) {
-								switch p {
-								case "matchSettings":
-									tracker.SetVictoryRule(BestOfN(0))
-								case "currentTeams":
-									tracker.SetCurrentTeams("", "")
-								case "currentScores":
-									tracker.SetScores(0, 0)
-								}
-							}
-						case "matchSettings":
-							vr := d.(map[string]interface{})["victoryRule"]
-							if vr == nil {
-								tracker.SetVictoryRule(BestOfN(0))
-								break
-							}
-							var rule MatchVictoryRule
-							switch vr.(map[string]interface{})["rule"] {
-							case "BestOfN":
-								rule = BestOfN(vr.(map[string]interface{})["length"].(float64))
-							case "StraightN":
-								rule = StraightN(vr.(map[string]interface{})["length"].(float64))
-							}
-							if rule == nil {
-								break
-							}
-							tracker.SetVictoryRule(rule)
-						case "currentTeams":
-							tracker.SetCurrentTeams(
-								d.(map[string]interface{})["blue"].(string),
-								d.(map[string]interface{})["gold"].(string))
-						case "currentScores":
-							tracker.SetScores(
-								int(d.(map[string]interface{})["blue"].(float64)),
-								int(d.(map[string]interface{})["gold"].(float64)))
-						}
-					}
-				}
+				handleWSIncoming(r, dataChan, tracker)
 			}
 		}()
 		c := make(chan interface{}, 256)
