@@ -1395,24 +1395,24 @@ func updateStats(msg *kqio.Message, state *kq.GameState) {
 	}
 }
 
-var port = flag.Int("port", 8080, "the port number to listen on")
-var model = flag.String("model", "sumLose", "the name of the model to use for predictions")
 func main() {
 	flag.Parse()
+	config, e := ReadConfig("config.json")
+	if e != nil && !os.IsNotExist(e) {
+		panic(fmt.Sprintf("Failed to load config %v", e))
+	}
 	broadcast := make(chan interface{})
-	go startWebServer(fmt.Sprintf(":%d", *port), broadcast)
+	go startWebServer(fmt.Sprintf(":%d", config.ServerPort), broadcast)
 	<-time.After(5 * time.Second)
 	webStartTime, _ := time.Parse(time.RFC3339Nano, "2018-10-20T18:39:49.376-05:00")
 
-	var e error
-	cabAddress := "ws://kq.local:12749"
 	args := flag.Args()
 	if len(args) >= 1 && len(args[0]) > 0 {
-		cabAddress = args[0]
+		config.CabAddress = args[0]
 	}
 	autoconn := delay(&autoConnector{nil, func() (*kqio.CabConnection, error) {
-		fmt.Fprintln(logOut, "Attempting to connect to", cabAddress)
-		return kqio.Connect(cabAddress)
+		fmt.Fprintln(logOut, "Attempting to connect to", config.CabAddress)
+		return kqio.Connect(config.CabAddress)
 	}}, 500*time.Millisecond)
 	replayLog, e = os.Create(fmt.Sprint("out", time.Now().Format("2006-01-02T15-04-05-0700"), ".log"))
 	if e != nil {
@@ -1422,7 +1422,9 @@ func main() {
 	defer func() { fmt.Fprintln(logOut, "Disconnecting"); autoconn.Close() }()
 	score := modelSumLose
 	scorers := [...]func(*kq.GameState, time.Time) float64{modelSumLose, modelMultLose, modelMultCbrt, modelMultSqrt, modelMultQueenSqrt}
-	switch *model {
+	switch config.TextOutputPredictionModelName {
+	case "":
+		score = nil
 	case "sumLose":
 		score = modelSumLose
 	case "multLose":
@@ -1434,7 +1436,7 @@ func main() {
 	case "multQSqrt":
 		score = modelMultQueenSqrt
 	default:
-		panic(fmt.Sprintf("Unknown model %v", *model))
+		panic(fmt.Sprintf("Unknown model %v", config.TextOutputPredictionModelName))
 	}
 	reader := kq.NewCabinet(strReader)
 	var msg kqio.Message
@@ -1466,7 +1468,10 @@ func main() {
 		updateStats(&msg, state)
 		if updateState(msg, state) && !state.Start.IsZero() && (state.InGame() || msg.Type == "victory") {
 			fmt.Fprintln(csvOut, &CsvPrinter{state.Map, msg.Time.Sub(state.Start), msg.Time, *state})
-			s := score(state, msg.Time)
+			var s float64
+			if score != nil {
+				s = score(state, msg.Time)
+			}
 			if msg.Type == "gamestart" {
 				broadcast <- msg.Time
 			} else if !msg.Time.Before(webStartTime) {
@@ -1494,14 +1499,16 @@ func main() {
 				}
 				broadcast <- dp
 			}
-			if s <= 0.5 {
-				fmt.Fprintf(predictionOut, "%*s%*v%%\n",
-					int(s*80), "|",
-					41-int(s*80), int((0.5-s)*200))
-			} else {
-				fmt.Fprintf(predictionOut, "%38v%%%*s\n",
-					int((s-0.5)*200),
-					int(s*80)-39, "|")
+			if score != nil {
+				if s <= 0.5 {
+					fmt.Fprintf(predictionOut, "%*s%*v%%\n",
+						int(s*80), "|",
+						41-int(s*80), int((0.5-s)*200))
+				} else {
+					fmt.Fprintf(predictionOut, "%38v%%%*s\n",
+						int((s-0.5)*200),
+						int(s*80)-39, "|")
+				}
 			}
 		}
 
