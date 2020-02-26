@@ -1075,9 +1075,13 @@ func (ac *autoConnector) Close() error {
 
 type delayed struct {
 	*autoConnector
-	input chan struct{ msg *kqio.MessageString; err error }
-	stop  chan struct{}
+	input chan struct {
+		msg *kqio.MessageString
+		err error
+	}
+	stop chan struct{}
 }
+
 func (d *delayed) ReadMessageString(out *kqio.MessageString) error {
 	data, ok := <-d.input
 	if !ok {
@@ -1090,7 +1094,8 @@ func (d *delayed) ReadMessageString(out *kqio.MessageString) error {
 }
 func (d *delayed) Close() error {
 	close(d.stop)
-	for gotMsg := true; gotMsg; _, gotMsg = <-d.input {}
+	for gotMsg := true; gotMsg; _, gotMsg = <-d.input {
+	}
 	return d.autoConnector.Close()
 }
 
@@ -1098,10 +1103,10 @@ func (d *delayed) reader(delayAmount time.Duration) {
 	defer close(d.input)
 
 	type node struct {
-		msg *kqio.MessageString
-		err error
+		msg    *kqio.MessageString
+		err    error
 		offset time.Duration
-		next *node
+		next   *node
 	}
 	inputs := make(chan *node)
 
@@ -1145,7 +1150,10 @@ func (d *delayed) reader(delayAmount time.Duration) {
 		if head != nil {
 			timer.Reset(head.offset)
 		}
-		d.input <- struct{ msg *kqio.MessageString; err error }{ n.msg, n.err }
+		d.input <- struct {
+			msg *kqio.MessageString
+			err error
+		}{n.msg, n.err}
 	}
 	for {
 		select {
@@ -1179,8 +1187,11 @@ func (d *delayed) reader(delayAmount time.Duration) {
 func delay(ac *autoConnector, amount time.Duration) *delayed {
 	d := &delayed{
 		ac,
-		make(chan struct{ msg *kqio.MessageString; err error }),
-	    make(chan struct{}),
+		make(chan struct {
+			msg *kqio.MessageString
+			err error
+		}),
+		make(chan struct{}),
 	}
 	go d.reader(amount)
 	return d
