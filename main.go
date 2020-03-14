@@ -1395,9 +1395,11 @@ func updateStats(msg *kqio.Message, state *kq.GameState) {
 	}
 }
 
+var configPath = flag.String("config", "config.json", "the path to the config file; it is not an error if this file does not exist")
+
 func main() {
 	flag.Parse()
-	config, e := ReadConfig("config.json")
+	config, e := ReadConfig(*configPath)
 	if e != nil && !os.IsNotExist(e) {
 		panic(fmt.Sprintf("Failed to load config %v", e))
 	}
