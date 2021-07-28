@@ -757,13 +757,20 @@ func updateStats(msg *kqio.Message, state *kq.GameState) {
 
 var configPath = flag.String("config", "config.json", "the path to the config file; it is not an error if this file does not exist")
 
+type mainEventKey int
+
+const (
+	GameStartTimeKey mainEventKey = iota
+	StatsUpdateKey
+)
+
 func main() {
 	flag.Parse()
 	config, e := ReadConfig(*configPath)
 	if e != nil && !os.IsNotExist(e) {
 		panic(fmt.Sprintf("Failed to load config %v", e))
 	}
-	broadcast := make(chan interface{})
+	broadcast := make(chan *Event)
 	go startWebServer(fmt.Sprintf(":%d", config.ServerPort), broadcast)
 	<-time.After(5 * time.Second)
 	webStartTime, _ := time.Parse(time.RFC3339Nano, "2018-10-20T18:39:49.376-05:00")
@@ -799,7 +806,7 @@ func main() {
 	fmt.Fprintln(csvOut, CsvHeader)
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
-	famine := NewFamineTracker(broadcast)
+	famine := NewFamineTracker()
 	for {
 		var isTick bool
 		select {
@@ -818,11 +825,13 @@ func main() {
 			continue
 		}
 		fmt.Fprintln(msgDump, msg)
+
+		event := EventWithMessage(&msg, isTick)
 		updateStats(&msg, state)
 		if (updateState(msg, state) || isTick) && !state.Start.IsZero() && (state.InGame() || msg.Type == "victory") {
 			fmt.Fprintln(csvOut, &CsvPrinter{state.Map, msg.Time.Sub(state.Start), msg.Time, *state})
 			if msg.Type == "gamestart" {
-				broadcast <- msg.Time
+				event.Data[GameStartTimeKey] = msg.Time
 			} else if !msg.Time.Before(webStartTime) {
 				var dp dataPoint
 				dp.when = msg.Time
@@ -844,7 +853,7 @@ func main() {
 					dp.winner = msg.Val.(parser.GameResultMessage).Winner.String()
 					dp.winType = msg.Val.(parser.GameResultMessage).EndCondition.String()
 				}
-				broadcast <- dp
+				event.Data[StatsUpdateKey] = dp
 			}
 			if score != nil {
 				s := score(state, msg.Time)
@@ -861,7 +870,9 @@ func main() {
 		}
 
 		if state.InGame() {
-			famine.Update(msg.Time, state, isTick)
+			famine.Update(event, state)
 		}
+
+		broadcast <- event
 	}
 }

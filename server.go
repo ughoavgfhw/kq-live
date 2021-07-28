@@ -452,14 +452,24 @@ func handleWSIncoming(r io.Reader, dataChan chan<- string, tracker gameTracker) 
 	}
 }
 
-func startWebServer(bindAddr string, dataSource <-chan interface{}) {
+func startWebServer(bindAddr string, dataSource <-chan *Event) {
 	mixed := make(chan interface{})
 	tracker := startGameTracker(mixed)
 	go func() {
-		for v := range dataSource {
-			mixed <- v
-			// huge hack to have this here
-			switch dp, _ := v.(dataPoint); dp.winner {
+		for e := range dataSource {
+			if gst := e.Data[GameStartTimeKey]; gst != nil {
+				mixed <- gst.(time.Time)
+			}
+			var winner string
+			if dp := e.Data[StatsUpdateKey]; dp != nil {
+				mixed <- dp.(dataPoint)
+				winner = dp.(dataPoint).winner
+			}
+			if fu := e.Data[FamineUpdateKey]; fu != nil {
+				mixed <- fu.(FamineUpdate)
+			}
+			// Bit of a hack to have this here
+			switch winner {
 			case "":
 				break
 			case "blue":
