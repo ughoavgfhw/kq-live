@@ -223,12 +223,6 @@ func startGameTracker(sendChangesTo chan<- interface{}) gameTracker {
 	}
 }
 
-type famineUpdate struct {
-	berriesLeft int
-	famineStart time.Time
-	currTime    time.Time
-}
-
 var playerPhotoDir = http.Dir("photos")
 
 func openPlayerPhoto(name string) (string, http.File) {
@@ -847,17 +841,17 @@ func startWebServer(bindAddr string, dataSource <-chan interface{}) {
 					p.Data.Section = "tournamentData"
 					p.Data.Parts = []dataPart{{Tag: "teams", Data: v}}
 
-				case famineUpdate:
+				case FamineUpdate:
 					if !doFamineUpdates {
 						continue
 					}
 					p.Data.Section = "famineTracker"
 					d := map[string]interface{}{
-						"berriesLeft": v.berriesLeft,
-						"inFamine":    !v.famineStart.IsZero(),
+						"berriesLeft": v.BerriesLeft,
+						"inFamine":    !v.FamineStart.IsZero(),
 					}
-					if !v.famineStart.IsZero() {
-						dur := 90*time.Second - v.currTime.Sub(v.famineStart)
+					if !v.FamineStart.IsZero() {
+						dur := 90*time.Second - v.CurrTime.Sub(v.FamineStart)
 						if dur < 0 {
 							dur = 0
 						}
