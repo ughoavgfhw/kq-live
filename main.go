@@ -78,7 +78,7 @@ func updateState(msg kqio.Message, game *kq.GameState) bool {
 	}
 	switch msg.Type {
 	case "alive":
-		return true // Trigger periodic outputs even if nothing is happening
+		return false
 	case "playernames", "glance", "reserveMaiden", "unreserveMaiden":
 		return false
 	case "gamestart":
@@ -1470,7 +1470,7 @@ func main() {
 		}
 		fmt.Fprintln(msgDump, msg)
 		updateStats(&msg, state)
-		if updateState(msg, state) && !state.Start.IsZero() && (state.InGame() || msg.Type == "victory") {
+		if (updateState(msg, state) || isTick) && !state.Start.IsZero() && (state.InGame() || msg.Type == "victory") {
 			fmt.Fprintln(csvOut, &CsvPrinter{state.Map, msg.Time.Sub(state.Start), msg.Time, *state})
 			var s float64
 			if score != nil {
