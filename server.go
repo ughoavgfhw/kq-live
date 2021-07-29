@@ -54,12 +54,33 @@ type serverEventKey int
 
 const (
 	ScoreUpdateKey serverEventKey = iota
+	TeamUpdateKey
 )
 
 type ScoreUpdate struct {
 	Blue int
 	Gold int
 }
+
+type TeamUpdate struct {
+	Blue string
+	Gold string
+}
+
+type ControlCommandType int
+
+type ControlCommand struct {
+	Type ControlCommandType
+	Data interface{}
+}
+
+const (
+	InvalidControlCommand ControlCommandType = iota
+	AdvanceMatch                             // Data is nil
+	SetVictoryRule                           // Data is MatchVictoryRule
+	SetCurrentTeams                          // Data is TeamUpdate
+	SetScores                                // Data is ScoreUpdate
+)
 
 func runRegistry(in <-chan interface{}, reg <-chan *chan<- interface{}, unreg <-chan *chan<- interface{}) {
 	registry := make(map[*chan<- interface{}]struct{})
@@ -344,7 +365,7 @@ func watchTeamsFile(c chan<- interface{}) *FileWatcher {
 	})
 }
 
-func handleWSIncoming(r io.Reader, dataChan chan<- string, tracker gameTracker) {
+func handleWSIncoming(r io.Reader, dataChan chan<- string, eventOutput EventStream) {
 	dec := json.NewDecoder(r)
 	dec.DisallowUnknownFields()
 	var tok json.Token
@@ -419,27 +440,28 @@ func handleWSIncoming(r io.Reader, dataChan chan<- string, tracker gameTracker) 
 		if m["section"].(string) != "control" {
 			break
 		}
+		var commands []ControlCommand
 		for _, part := range m["parts"].([]interface{}) {
 			tag := part.(map[string]interface{})["tag"]
 			d := part.(map[string]interface{})["data"]
 			switch tag {
 			case "advanceMatch":
-				tracker.AdvanceMatch()
+				commands = append(commands, ControlCommand{AdvanceMatch, nil})
 			case "reset":
 				for _, p := range d.([]interface{}) {
 					switch p {
 					case "matchSettings":
-						tracker.SetVictoryRule(BestOfN(0))
+						commands = append(commands, ControlCommand{SetVictoryRule, BestOfN(0)})
 					case "currentTeams":
-						tracker.SetCurrentTeams("", "")
+						commands = append(commands, ControlCommand{SetCurrentTeams, TeamUpdate{"", ""}})
 					case "currentScores":
-						tracker.SetScores(0, 0, nil)
+						commands = append(commands, ControlCommand{SetScores, ScoreUpdate{0, 0}})
 					}
 				}
 			case "matchSettings":
 				vr := d.(map[string]interface{})["victoryRule"]
 				if vr == nil {
-					tracker.SetVictoryRule(BestOfN(0))
+					commands = append(commands, ControlCommand{SetVictoryRule, BestOfN(0)})
 					break
 				}
 				var rule MatchVictoryRule
@@ -452,42 +474,61 @@ func handleWSIncoming(r io.Reader, dataChan chan<- string, tracker gameTracker) 
 				if rule == nil {
 					break
 				}
-				tracker.SetVictoryRule(rule)
+				commands = append(commands, ControlCommand{SetVictoryRule, rule})
 			case "currentTeams":
-				tracker.SetCurrentTeams(
+				commands = append(commands, ControlCommand{SetCurrentTeams, TeamUpdate{
 					d.(map[string]interface{})["blue"].(string),
-					d.(map[string]interface{})["gold"].(string))
+					d.(map[string]interface{})["gold"].(string),
+				}})
 			case "currentScores":
-				tracker.SetScores(
+				commands = append(commands, ControlCommand{SetScores, ScoreUpdate{
 					int(d.(map[string]interface{})["blue"].(float64)),
 					int(d.(map[string]interface{})["gold"].(float64)),
-					nil)
+				}})
 			}
+		}
+		if len(commands) > 0 {
+			eventOutput.AddEvent(NewControlEvent(commands))
 		}
 	}
 }
 
-func startWebServer(bindAddr string, dataSource <-chan *Event) {
+func startWebServer(bindAddr string, eventStream EventStream) {
 	mixed := make(chan interface{})
 	tracker := startGameTracker(mixed)
 	go func() {
-		for e := range dataSource {
+		var e *Event
+		for e = eventStream.Next(); e != nil; e = eventStream.Next() {
+			switch e.Type {
+			case CabMessageEvent:
+				if dp := e.Data[StatsUpdateKey]; dp != nil {
+					switch dp.(dataPoint).winner {
+					case "blue":
+						b, g := tracker.Scores()
+						tracker.SetScores(b+1, g, e)
+					case "gold":
+						b, g := tracker.Scores()
+						tracker.SetScores(b, g+1, e)
+					}
+				}
+
+			case ControlEvent:
+				for _, command := range e.Data[ControlCommandKey].([]ControlCommand) {
+					switch command.Type {
+					case AdvanceMatch:
+						tracker.AdvanceMatch()
+					case SetVictoryRule:
+						tracker.SetVictoryRule(command.Data.(MatchVictoryRule))
+					case SetCurrentTeams:
+						update := command.Data.(TeamUpdate)
+						tracker.SetCurrentTeams(update.Blue, update.Gold)
+					case SetScores:
+						update := command.Data.(ScoreUpdate)
+						tracker.SetScores(update.Blue, update.Gold, e)
+					}
+				}
+			}
 			mixed <- e
-			// Bit of a hack to have this here
-			var winner string
-			if dp := e.Data[StatsUpdateKey]; dp != nil {
-				winner = dp.(dataPoint).winner
-			}
-			switch winner {
-			case "":
-				break
-			case "blue":
-				b, g := tracker.Scores()
-				tracker.SetScores(b+1, g)
-			case "gold":
-				b, g := tracker.Scores()
-				tracker.SetScores(b, g+1)
-			}
 		}
 	}()
 
@@ -693,7 +734,7 @@ func startWebServer(bindAddr string, dataSource <-chan *Event) {
 					close(dataChan)
 					break
 				}
-				handleWSIncoming(r, dataChan, tracker)
+				handleWSIncoming(r, dataChan, eventStream)
 			}
 		}()
 		c := make(chan interface{}, 256)

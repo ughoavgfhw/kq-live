@@ -770,8 +770,9 @@ func main() {
 	if e != nil && !os.IsNotExist(e) {
 		panic(fmt.Sprintf("Failed to load config %v", e))
 	}
-	broadcast := make(chan *Event)
-	go startWebServer(fmt.Sprintf(":%d", config.ServerPort), broadcast)
+	eventStream := NewEventStream()
+	defer eventStream.Close()
+	go startWebServer(fmt.Sprintf(":%d", config.ServerPort), eventStream)
 	<-time.After(5 * time.Second)
 	webStartTime, _ := time.Parse(time.RFC3339Nano, "2018-10-20T18:39:49.376-05:00")
 
@@ -873,6 +874,6 @@ func main() {
 			famine.Update(event, state)
 		}
 
-		broadcast <- event
+		eventStream.AddEvent(event)
 	}
 }
