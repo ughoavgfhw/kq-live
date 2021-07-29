@@ -55,6 +55,7 @@ type serverEventKey int
 const (
 	ScoreUpdateKey serverEventKey = iota
 	TeamUpdateKey
+	VictoryRuleKey
 )
 
 type ScoreUpdate struct {
@@ -104,7 +105,7 @@ func runRegistry(in <-chan interface{}, reg <-chan *chan<- interface{}, unreg <-
 type gameTracker struct {
 	Stop            func()
 	VictoryRule     func() MatchVictoryRule
-	SetVictoryRule  func(rule MatchVictoryRule)
+	SetVictoryRule  func(rule MatchVictoryRule, event *Event)
 	SwapSides       func()
 	AdvanceMatch    func()
 	CurrentTeams    func() (blueTeam string, goldTeam string)
@@ -135,7 +136,6 @@ func startGameTracker(sendChangesTo chan<- interface{}) gameTracker {
 					reply <- tracker.VictoryRule()
 				} else {
 					tracker.SetVictoryRule(cmd.data.(MatchVictoryRule))
-					sendChangesTo <- tracker.VictoryRule()
 				}
 			case 1:
 				tracker.SwapSides()
@@ -217,8 +217,11 @@ func startGameTracker(sendChangesTo chan<- interface{}) gameTracker {
 			send <- command{0, nil}
 			return (<-reply).(MatchVictoryRule)
 		},
-		SetVictoryRule: func(rule MatchVictoryRule) {
+		SetVictoryRule: func(rule MatchVictoryRule, event *Event) {
 			send <- command{0, rule}
+			if event != nil {
+				event.Data[VictoryRuleKey] = rule
+			}
 		},
 		SwapSides: func() {
 			send <- command{1, nil}
@@ -519,7 +522,7 @@ func startWebServer(bindAddr string, eventStream EventStream) {
 					case AdvanceMatch:
 						tracker.AdvanceMatch()
 					case SetVictoryRule:
-						tracker.SetVictoryRule(command.Data.(MatchVictoryRule))
+						tracker.SetVictoryRule(command.Data.(MatchVictoryRule), e)
 					case SetCurrentTeams:
 						update := command.Data.(TeamUpdate)
 						tracker.SetCurrentTeams(update.Blue, update.Gold, e)
@@ -889,6 +892,24 @@ func startWebServer(bindAddr string, eventStream EventStream) {
 
 					if doControl {
 						p.Data.Section = "control"
+						if vr, ok := v.Data[VictoryRuleKey].(MatchVictoryRule); ok {
+							type ds struct {
+								VictoryRule struct {
+									Rule   string `json:"rule"`
+									Length int    `json:"length"`
+								} `json:"victoryRule"`
+							}
+							var d ds
+							switch vr := vr.(type) {
+							case BestOfN:
+								d.VictoryRule.Rule = "BestOfN"
+								d.VictoryRule.Length = int(vr)
+							case StraightN:
+								d.VictoryRule.Rule = "StraightN"
+								d.VictoryRule.Length = int(vr)
+							}
+							p.Data.Parts = []dataPart{{Tag: "matchSettings", Data: d}}
+						}
 						if tu, ok := v.Data[TeamUpdateKey].(TeamUpdate); ok {
 							t := make(map[string]interface{})
 							t["blue"] = tu.Blue
@@ -908,6 +929,24 @@ func startWebServer(bindAddr string, eventStream EventStream) {
 
 					if doCurrentMatch {
 						p.Data.Section = "currentMatch"
+						if vr, ok := v.Data[VictoryRuleKey].(MatchVictoryRule); ok {
+							type ds struct {
+								VictoryRule struct {
+									Rule   string `json:"rule"`
+									Length int    `json:"length"`
+								} `json:"victoryRule"`
+							}
+							var d ds
+							switch vr := vr.(type) {
+							case BestOfN:
+								d.VictoryRule.Rule = "BestOfN"
+								d.VictoryRule.Length = int(vr)
+							case StraightN:
+								d.VictoryRule.Rule = "StraightN"
+								d.VictoryRule.Length = int(vr)
+							}
+							p.Data.Parts = []dataPart{{Tag: "settings", Data: d}}
+						}
 						if tu, ok := v.Data[TeamUpdateKey].(TeamUpdate); ok {
 							t := make(map[string]interface{})
 							t["blue"] = tu.Blue
