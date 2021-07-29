@@ -108,7 +108,7 @@ type gameTracker struct {
 	SwapSides       func()
 	AdvanceMatch    func()
 	CurrentTeams    func() (blueTeam string, goldTeam string)
-	SetCurrentTeams func(blue, gold string)
+	SetCurrentTeams func(blue, gold string, event *Event)
 	Scores          func() (blueScore int, goldScore int)
 	SetScores       func(blue, gold int, event *Event)
 	OnDeckTeams     func() (blueTeam string, goldTeam string)
@@ -171,7 +171,6 @@ func startGameTracker(sendChangesTo chan<- interface{}) gameTracker {
 					} else {
 						ms.TeamB, ms.TeamA = t.blue, t.gold
 					}
-					sendChangesTo <- ms
 				}
 			case 4:
 				ms := tracker.CurrentMatch()
@@ -188,7 +187,6 @@ func startGameTracker(sendChangesTo chan<- interface{}) gameTracker {
 					} else {
 						ms.ScoreB, ms.ScoreA = s.blue, s.gold
 					}
-					sendChangesTo <- ms
 				}
 			case 5:
 				ms := tracker.UpcomingMatch(0)
@@ -233,8 +231,11 @@ func startGameTracker(sendChangesTo chan<- interface{}) gameTracker {
 			r := (<-reply).(teams)
 			return r.blue, r.gold
 		},
-		SetCurrentTeams: func(blue, gold string) {
+		SetCurrentTeams: func(blue, gold string, event *Event) {
 			send <- command{3, teams{blue, gold}}
+			if event != nil {
+				event.Data[TeamUpdateKey] = TeamUpdate{blue, gold}
+			}
 		},
 		Scores: func() (blueScore int, goldScore int) {
 			send <- command{4, nil}
@@ -521,7 +522,7 @@ func startWebServer(bindAddr string, eventStream EventStream) {
 						tracker.SetVictoryRule(command.Data.(MatchVictoryRule))
 					case SetCurrentTeams:
 						update := command.Data.(TeamUpdate)
-						tracker.SetCurrentTeams(update.Blue, update.Gold)
+						tracker.SetCurrentTeams(update.Blue, update.Gold, e)
 					case SetScores:
 						update := command.Data.(ScoreUpdate)
 						tracker.SetScores(update.Blue, update.Gold, e)
@@ -864,9 +865,10 @@ func startWebServer(bindAddr string, eventStream EventStream) {
 							send(&p)
 						}
 					}
+
 					if doFamineUpdates {
+						p.Data.Section = "famineTracker"
 						if fu, ok := v.Data[FamineUpdateKey].(FamineUpdate); ok {
-							p.Data.Section = "famineTracker"
 							d := map[string]interface{}{
 								"berriesLeft": fu.BerriesLeft,
 								"inFamine":    !fu.FamineStart.IsZero(),
@@ -879,6 +881,44 @@ func startWebServer(bindAddr string, eventStream EventStream) {
 								d["famineLeftSeconds"] = float64(dur) / float64(time.Second)
 							}
 							p.Data.Parts = append(p.Data.Parts, dataPart{Tag: "update", Data: d})
+						}
+						if len(p.Data.Parts) > 0 {
+							send(&p)
+						}
+					}
+
+					if doControl {
+						p.Data.Section = "control"
+						if tu, ok := v.Data[TeamUpdateKey].(TeamUpdate); ok {
+							t := make(map[string]interface{})
+							t["blue"] = tu.Blue
+							t["gold"] = tu.Gold
+							p.Data.Parts = append(p.Data.Parts, dataPart{Tag: "currentTeams", Data: t})
+						}
+						if su, ok := v.Data[ScoreUpdateKey].(ScoreUpdate); ok {
+							s := make(map[string]interface{})
+							s["blue"] = su.Blue
+							s["gold"] = su.Gold
+							p.Data.Parts = append(p.Data.Parts, dataPart{Tag: "currentScores", Data: s})
+						}
+						if len(p.Data.Parts) > 0 {
+							send(&p)
+						}
+					}
+
+					if doCurrentMatch {
+						p.Data.Section = "currentMatch"
+						if tu, ok := v.Data[TeamUpdateKey].(TeamUpdate); ok {
+							t := make(map[string]interface{})
+							t["blue"] = tu.Blue
+							t["gold"] = tu.Gold
+							p.Data.Parts = append(p.Data.Parts, dataPart{Tag: "teams", Data: t})
+						}
+						if su, ok := v.Data[ScoreUpdateKey].(ScoreUpdate); ok {
+							s := make(map[string]interface{})
+							s["blue"] = su.Blue
+							s["gold"] = su.Gold
+							p.Data.Parts = append(p.Data.Parts, dataPart{Tag: "scores", Data: s})
 						}
 						if len(p.Data.Parts) > 0 {
 							send(&p)
