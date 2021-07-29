@@ -106,8 +106,8 @@ type gameTracker struct {
 	Stop            func()
 	VictoryRule     func() MatchVictoryRule
 	SetVictoryRule  func(rule MatchVictoryRule, event *Event)
-	SwapSides       func()
-	AdvanceMatch    func()
+	SwapSides       func(event *Event)
+	AdvanceMatch    func(event *Event)
 	CurrentTeams    func() (blueTeam string, goldTeam string)
 	SetCurrentTeams func(blue, gold string, event *Event)
 	Scores          func() (blueScore int, goldScore int)
@@ -116,7 +116,7 @@ type gameTracker struct {
 	SetOnDeckTeams  func(blue, gold string)
 }
 
-func startGameTracker(sendChangesTo chan<- interface{}) gameTracker {
+func startGameTracker() gameTracker {
 	type teams struct{ blue, gold string }
 	type scores struct{ blue, gold int }
 	type command struct {
@@ -139,12 +139,57 @@ func startGameTracker(sendChangesTo chan<- interface{}) gameTracker {
 				}
 			case 1:
 				tracker.SwapSides()
-				sendChangesTo <- tracker.CurrentMatch()
+				match := tracker.CurrentMatch()
+				if event := cmd.data.(*Event); event != nil {
+					if tracker.TeamASide() == kq.BlueSide {
+						event.Data[TeamUpdateKey] = TeamUpdate{
+							Blue: match.TeamA,
+							Gold: match.TeamB,
+						}
+						event.Data[ScoreUpdateKey] = ScoreUpdate{
+							Blue: match.ScoreA,
+							Gold: match.ScoreB,
+						}
+					} else {
+						event.Data[TeamUpdateKey] = TeamUpdate{
+							Blue: match.TeamB,
+							Gold: match.TeamA,
+						}
+						event.Data[ScoreUpdateKey] = ScoreUpdate{
+							Blue: match.ScoreB,
+							Gold: match.ScoreA,
+						}
+					}
+					reply <- event // Just to indicate we are done with the synchronized section.
+				}
 			case 2:
 				prev := tracker.CurrentMatch()
 				tracker.AdvanceMatch()
 				next := tracker.CurrentMatch()
-				sendChangesTo <- next
+				if event := cmd.data.(*Event); event != nil {
+					event.Data[VictoryRuleKey] = tracker.VictoryRule()
+					if tracker.TeamASide() == kq.BlueSide {
+						event.Data[TeamUpdateKey] = TeamUpdate{
+							Blue: next.TeamA,
+							Gold: next.TeamB,
+						}
+						event.Data[ScoreUpdateKey] = ScoreUpdate{
+							Blue: next.ScoreA,
+							Gold: next.ScoreB,
+						}
+					} else {
+						event.Data[TeamUpdateKey] = TeamUpdate{
+							Blue: next.TeamB,
+							Gold: next.TeamA,
+						}
+						event.Data[ScoreUpdateKey] = ScoreUpdate{
+							Blue: next.ScoreB,
+							Gold: next.ScoreA,
+						}
+					}
+					reply <- event // Just to indicate we are done with the synchronized section.
+				}
+
 				switch true {
 				case prev.ScoreA > prev.ScoreB:
 					fmt.Printf("%s defeats %s, %d-%d\n", prev.TeamA, prev.TeamB, prev.ScoreA, prev.ScoreB)
@@ -223,11 +268,17 @@ func startGameTracker(sendChangesTo chan<- interface{}) gameTracker {
 				event.Data[VictoryRuleKey] = rule
 			}
 		},
-		SwapSides: func() {
-			send <- command{1, nil}
+		SwapSides: func(event *Event) {
+			send <- command{1, event}
+			if event != nil {
+				<-reply
+			}
 		},
-		AdvanceMatch: func() {
-			send <- command{2, nil}
+		AdvanceMatch: func(event *Event) {
+			send <- command{2, event}
+			if event != nil {
+				<-reply
+			}
 		},
 		CurrentTeams: func() (blueTeam string, goldTeam string) {
 			send <- command{3, nil}
@@ -499,7 +550,7 @@ func handleWSIncoming(r io.Reader, dataChan chan<- string, eventOutput EventStre
 
 func startWebServer(bindAddr string, eventStream EventStream) {
 	mixed := make(chan interface{})
-	tracker := startGameTracker(mixed)
+	tracker := startGameTracker()
 	go func() {
 		var e *Event
 		for e = eventStream.Next(); e != nil; e = eventStream.Next() {
@@ -520,7 +571,7 @@ func startWebServer(bindAddr string, eventStream EventStream) {
 				for _, command := range e.Data[ControlCommandKey].([]ControlCommand) {
 					switch command.Type {
 					case AdvanceMatch:
-						tracker.AdvanceMatch()
+						tracker.AdvanceMatch(e)
 					case SetVictoryRule:
 						tracker.SetVictoryRule(command.Data.(MatchVictoryRule), e)
 					case SetCurrentTeams:
