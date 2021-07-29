@@ -457,18 +457,12 @@ func startWebServer(bindAddr string, dataSource <-chan *Event) {
 	tracker := startGameTracker(mixed)
 	go func() {
 		for e := range dataSource {
-			if gst := e.Data[GameStartTimeKey]; gst != nil {
-				mixed <- gst.(time.Time)
-			}
+			mixed <- e
+			// Bit of a hack to have this here
 			var winner string
 			if dp := e.Data[StatsUpdateKey]; dp != nil {
-				mixed <- dp.(dataPoint)
 				winner = dp.(dataPoint).winner
 			}
-			if fu := e.Data[FamineUpdateKey]; fu != nil {
-				mixed <- fu.(FamineUpdate)
-			}
-			// Bit of a hack to have this here
 			switch winner {
 			case "":
 				break
@@ -621,14 +615,17 @@ func startWebServer(bindAddr string, dataSource <-chan *Event) {
 		go func() {
 			var timeBuff []byte
 			for v := range c {
-				switch v := v.(type) {
-				case time.Time:
+				ev, ok := v.(*Event)
+				if !ok {
+					continue
+				}
+				if t, ok := ev.Data[GameStartTimeKey].(time.Time); ok {
 					w, e := conn.NextWriter(websocket.TextMessage)
 					if e != nil {
 						fmt.Println(e)
 						break
 					}
-					timeBuff = v.AppendFormat(timeBuff[:0], time.RFC3339Nano)
+					timeBuff = t.AppendFormat(timeBuff[:0], time.RFC3339Nano)
 					_, e = fmt.Fprintf(w, "reset,%s,6", timeBuff)
 					ce := w.Close()
 					if e != nil {
@@ -639,15 +636,16 @@ func startWebServer(bindAddr string, dataSource <-chan *Event) {
 						fmt.Println(ce)
 						break
 					}
-				case dataPoint:
+				}
+				if dp, ok := ev.Data[StatsUpdateKey].(dataPoint); ok {
 					w, e := conn.NextWriter(websocket.TextMessage)
 					if e != nil {
 						fmt.Println(e)
 						break
 					}
-					timeBuff = v.when.AppendFormat(timeBuff[:0], time.RFC3339Nano)
-					_, e = fmt.Fprintf(w, "next,%s,%s", timeBuff, v.event)
-					for _, val := range v.vals {
+					timeBuff = dp.when.AppendFormat(timeBuff[:0], time.RFC3339Nano)
+					_, e = fmt.Fprintf(w, "next,%s,%s", timeBuff, dp.event)
+					for _, val := range dp.vals {
 						_, e = fmt.Fprintf(w, ",%v", val)
 					}
 					ce := w.Close()
@@ -756,38 +754,81 @@ func startWebServer(bindAddr string, dataSource <-chan *Event) {
 					Type string     `json:"type"`
 					Data packetData `json:"data"`
 				}
+				send := func(p *packet) {
+					defer func() { p.Data.Parts = p.Data.Parts[:0] }()
+					w, e := conn.NextWriter(websocket.TextMessage)
+					if e != nil {
+						fmt.Println(e)
+						return
+					}
+					enc := json.NewEncoder(w)
+					enc.SetEscapeHTML(false)
+					e = enc.Encode(p)
+					ce := w.Close()
+					if e != nil {
+						fmt.Println(e)
+						return
+					}
+					if ce != nil {
+						fmt.Println(ce)
+						return
+					}
+				}
 				p := packet{Type: "data"}
 				switch v := v.(type) {
-				case time.Time:
-					if !doPredictions {
-						continue
+				case *Event:
+					if doPredictions {
+						p.Data.Section = "prediction"
+						if t, ok := v.Data[GameStartTimeKey].(time.Time); ok {
+							timeBuff = t.AppendFormat(timeBuff[:0], time.RFC3339Nano)
+							p.Data.Parts = append(p.Data.Parts, dataPart{Tag: "reset", Data: string(timeBuff)})
+						}
+						if dp, ok := v.Data[StatsUpdateKey].(dataPoint); ok {
+							timeBuff = dp.when.AppendFormat(timeBuff[:0], time.RFC3339Nano)
+							d := make(map[string]interface{})
+							d["time"] = string(timeBuff)
+							if dp.event != "" {
+								d["event"] = dp.event
+							}
+							d["scores"] = dp.vals
+							s := make(map[string]interface{})
+							s["stats"] = dp.stats
+							s["status"] = dp.status
+							s["map"] = dp.mp
+							s["duration"] = dp.dur
+							if dp.winner != "" {
+								s["winner"] = dp.winner
+								s["winType"] = dp.winType
+							}
+							p.Data.Parts = append(p.Data.Parts,
+								dataPart{Tag: "next", Data: d},
+								dataPart{Tag: "stats", Data: s})
+						}
+						if len(p.Data.Parts) > 0 {
+							send(&p)
+						}
 					}
-					p.Data.Section = "prediction"
-					timeBuff = v.AppendFormat(timeBuff[:0], time.RFC3339Nano)
-					p.Data.Parts = []dataPart{{Tag: "reset", Data: string(timeBuff)}}
-				case dataPoint:
-					if !doPredictions {
-						continue
+					if doFamineUpdates {
+						if fu, ok := v.Data[FamineUpdateKey].(FamineUpdate); ok {
+							p.Data.Section = "famineTracker"
+							d := map[string]interface{}{
+								"berriesLeft": fu.BerriesLeft,
+								"inFamine":    !fu.FamineStart.IsZero(),
+							}
+							if !fu.FamineStart.IsZero() {
+								dur := 90*time.Second - fu.CurrTime.Sub(fu.FamineStart)
+								if dur < 0 {
+									dur = 0
+								}
+								d["famineLeftSeconds"] = float64(dur) / float64(time.Second)
+							}
+							p.Data.Parts = append(p.Data.Parts, dataPart{Tag: "update", Data: d})
+						}
+						if len(p.Data.Parts) > 0 {
+							send(&p)
+						}
 					}
-					p.Data.Section = "prediction"
-					timeBuff = v.when.AppendFormat(timeBuff[:0], time.RFC3339Nano)
-					d := make(map[string]interface{})
-					d["time"] = string(timeBuff)
-					if v.event != "" {
-						d["event"] = v.event
-					}
-					d["scores"] = v.vals
-					s := make(map[string]interface{})
-					s["stats"] = v.stats
-					s["status"] = v.status
-					s["map"] = v.mp
-					s["duration"] = v.dur
-					if v.winner != "" {
-						s["winner"] = v.winner
-						s["winType"] = v.winType
-					}
-					p.Data.Parts = []dataPart{{Tag: "next", Data: d},
-						{Tag: "stats", Data: s}}
+
 				case MatchVictoryRule:
 					var tag string
 					if doControl {
@@ -815,6 +856,7 @@ func startWebServer(bindAddr string, dataSource <-chan *Event) {
 						d.VictoryRule.Length = int(vr)
 					}
 					p.Data.Parts = []dataPart{{Tag: tag, Data: d}}
+					send(&p)
 				case *MatchScores:
 					//!!!!: Race condition here, as the MatchScores are being updated in a different goroutine. So far it seems to have been fine but this should be fixed when redesigning.
 					var teamTag, scoreTag string
@@ -836,6 +878,7 @@ func startWebServer(bindAddr string, dataSource <-chan *Event) {
 					s["gold"] = v.ScoreB
 					p.Data.Parts = []dataPart{{Tag: teamTag, Data: t},
 						{Tag: scoreTag, Data: s}}
+					send(&p)
 
 				case teamList:
 					if !doControl {
@@ -843,6 +886,7 @@ func startWebServer(bindAddr string, dataSource <-chan *Event) {
 					}
 					p.Data.Section = "control"
 					p.Data.Parts = []dataPart{{Tag: "teamList", Data: v}}
+					send(&p)
 
 				case map[string][]playerData:
 					if !doTournamentData {
@@ -850,41 +894,7 @@ func startWebServer(bindAddr string, dataSource <-chan *Event) {
 					}
 					p.Data.Section = "tournamentData"
 					p.Data.Parts = []dataPart{{Tag: "teams", Data: v}}
-
-				case FamineUpdate:
-					if !doFamineUpdates {
-						continue
-					}
-					p.Data.Section = "famineTracker"
-					d := map[string]interface{}{
-						"berriesLeft": v.BerriesLeft,
-						"inFamine":    !v.FamineStart.IsZero(),
-					}
-					if !v.FamineStart.IsZero() {
-						dur := 90*time.Second - v.CurrTime.Sub(v.FamineStart)
-						if dur < 0 {
-							dur = 0
-						}
-						d["famineLeftSeconds"] = float64(dur) / float64(time.Second)
-					}
-					p.Data.Parts = []dataPart{{Tag: "update", Data: d}}
-				}
-				w, e := conn.NextWriter(websocket.TextMessage)
-				if e != nil {
-					fmt.Println(e)
-					break
-				}
-				enc := json.NewEncoder(w)
-				enc.SetEscapeHTML(false)
-				e = enc.Encode(p)
-				ce := w.Close()
-				if e != nil {
-					fmt.Println(e)
-					break
-				}
-				if ce != nil {
-					fmt.Println(ce)
-					break
+					send(&p)
 				}
 			}
 		}()
