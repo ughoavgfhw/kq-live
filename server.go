@@ -50,6 +50,17 @@ type dataPoint struct {
 	dur                 time.Duration
 }
 
+type serverEventKey int
+
+const (
+	ScoreUpdateKey serverEventKey = iota
+)
+
+type ScoreUpdate struct {
+	Blue int
+	Gold int
+}
+
 func runRegistry(in <-chan interface{}, reg <-chan *chan<- interface{}, unreg <-chan *chan<- interface{}) {
 	registry := make(map[*chan<- interface{}]struct{})
 	for {
@@ -78,7 +89,7 @@ type gameTracker struct {
 	CurrentTeams    func() (blueTeam string, goldTeam string)
 	SetCurrentTeams func(blue, gold string)
 	Scores          func() (blueScore int, goldScore int)
-	SetScores       func(blue, gold int)
+	SetScores       func(blue, gold int, event *Event)
 	OnDeckTeams     func() (blueTeam string, goldTeam string)
 	SetOnDeckTeams  func(blue, gold string)
 }
@@ -209,8 +220,11 @@ func startGameTracker(sendChangesTo chan<- interface{}) gameTracker {
 			r := (<-reply).(scores)
 			return r.blue, r.gold
 		},
-		SetScores: func(blue, gold int) {
+		SetScores: func(blue, gold int, event *Event) {
 			send <- command{4, scores{blue, gold}}
+			if event != nil {
+				event.Data[ScoreUpdateKey] = ScoreUpdate{blue, gold}
+			}
 		},
 		OnDeckTeams: func() (blueTeam string, goldTeam string) {
 			send <- command{5, nil}
@@ -419,7 +433,7 @@ func handleWSIncoming(r io.Reader, dataChan chan<- string, tracker gameTracker) 
 					case "currentTeams":
 						tracker.SetCurrentTeams("", "")
 					case "currentScores":
-						tracker.SetScores(0, 0)
+						tracker.SetScores(0, 0, nil)
 					}
 				}
 			case "matchSettings":
@@ -446,7 +460,8 @@ func handleWSIncoming(r io.Reader, dataChan chan<- string, tracker gameTracker) 
 			case "currentScores":
 				tracker.SetScores(
 					int(d.(map[string]interface{})["blue"].(float64)),
-					int(d.(map[string]interface{})["gold"].(float64)))
+					int(d.(map[string]interface{})["gold"].(float64)),
+					nil)
 			}
 		}
 	}
