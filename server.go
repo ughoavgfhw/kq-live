@@ -77,11 +77,18 @@ type ControlCommand struct {
 
 const (
 	InvalidControlCommand ControlCommandType = iota
+	// Note: ClientStartRequest must always be the only command in an event.
+	ClientStartRequest                       // Data is ClientStartOptions
 	AdvanceMatch                             // Data is nil
 	SetVictoryRule                           // Data is MatchVictoryRule
 	SetCurrentTeams                          // Data is TeamUpdate
 	SetScores                                // Data is ScoreUpdate
 )
+
+type ClientStartOptions struct {
+	ClientIdentifier *chan<- interface{} // The registration token.
+	Sections         map[string]bool
+}
 
 func runRegistry(in <-chan interface{}, reg <-chan *chan<- interface{}, unreg <-chan *chan<- interface{}) {
 	registry := make(map[*chan<- interface{}]struct{})
@@ -420,7 +427,7 @@ func watchTeamsFile(c chan<- interface{}) *FileWatcher {
 	})
 }
 
-func handleWSIncoming(r io.Reader, dataChan chan<- string, eventOutput EventStream) {
+func handleWSIncoming(r io.Reader, registration *chan<- interface{}, eventOutput EventStream) {
 	dec := json.NewDecoder(r)
 	dec.DisallowUnknownFields()
 	var tok json.Token
@@ -487,9 +494,18 @@ func handleWSIncoming(r io.Reader, dataChan chan<- string, eventOutput EventStre
 	}
 	switch typ {
 	case "client_start":
-		for _, v := range data.(map[string]interface{})["sections"].([]interface{}) {
-			dataChan <- v.(string)
+		s := data.(map[string]interface{})["sections"].([]interface{})
+		sections := make(map[string]bool)
+		for _, v := range s {
+			sections[v.(string)] = true
 		}
+		eventOutput.AddEvent(NewControlEvent([]ControlCommand{{
+			Type: ClientStartRequest,
+			Data: ClientStartOptions{
+				ClientIdentifier: registration,
+				Sections:         sections,
+			},
+		}}))
 	case "data":
 		m := data.(map[string]interface{})
 		if m["section"].(string) != "control" {
@@ -580,6 +596,39 @@ func startWebServer(bindAddr string, eventStream EventStream) {
 					case SetScores:
 						update := command.Data.(ScoreUpdate)
 						tracker.SetScores(update.Blue, update.Gold, e)
+
+					case ClientStartRequest:
+						sections := command.Data.(ClientStartOptions).Sections
+						// Attach current state.
+						if sections["control"] || sections["currentMatch"] {
+							e.Data[VictoryRuleKey] = tracker.VictoryRule()
+							blueTeam, goldTeam := tracker.CurrentTeams()
+							e.Data[TeamUpdateKey] = TeamUpdate{blueTeam, goldTeam}
+							blueScore, goldScore := tracker.Scores()
+							e.Data[ScoreUpdateKey] = ScoreUpdate{blueScore, goldScore}
+						}
+						if sections["control"] {
+							// Hack for current teams list
+							c := *command.Data.(ClientStartOptions).ClientIdentifier
+							go func() {
+								// Need to let the event get processed first, so that this doesn't get dropped.
+								time.Sleep(100 * time.Millisecond)
+								currTeamsMu.Lock()
+								c <- currTeams
+								currTeamsMu.Unlock()
+							}()
+						}
+						if sections["tournamentData"] {
+							// Hack for current player data
+							c := *command.Data.(ClientStartOptions).ClientIdentifier
+							go func() {
+								// Need to let the event get processed first, so that this doesn't get dropped.
+								time.Sleep(100 * time.Millisecond)
+								currTeamsMu.Lock()
+								c <- currPlayers
+								currTeamsMu.Unlock()
+							}()
+						}
 					}
 				}
 			}
@@ -780,21 +829,21 @@ func startWebServer(bindAddr string, eventStream EventStream) {
 			fmt.Println(err)
 			return
 		}
-		dataChan := make(chan string)
+		shutdown := make(chan struct{})
+		c := make(chan interface{}, 256)
+		var writeEnd chan<- interface{} = c
+		reg <- &writeEnd
 		go func() {
 			for {
 				_, r, err := conn.NextReader()
 				if err != nil {
 					fmt.Println(err)
-					close(dataChan)
+					close(shutdown)
 					break
 				}
-				handleWSIncoming(r, dataChan, eventStream)
+				handleWSIncoming(r, &writeEnd, eventStream)
 			}
 		}()
-		c := make(chan interface{}, 256)
-		var writeEnd chan<- interface{} = c
-		reg <- &writeEnd
 		go func() {
 			defer func() {
 				unreg <- &writeEnd
@@ -810,48 +859,32 @@ func startWebServer(bindAddr string, eventStream EventStream) {
 				var v interface{}
 				select {
 				case v = <-c:
-				case s, ok := <-dataChan:
+				case _, ok := <-shutdown:
 					if !ok {
 						return
 					}
-					switch s {
-					case "prediction":
-						doPredictions = true
-					case "control":
-						doControl = true
-						// Send current state. Definitely a hack but it works for now.
-						go func() {
-							c <- tracker.VictoryRule()
-							var ms MatchScores
-							ms.TeamA, ms.TeamB = tracker.CurrentTeams()
-							ms.ScoreA, ms.ScoreB = tracker.Scores()
-							c <- &ms
-							currTeamsMu.Lock()
-							c <- currTeams
-							currTeamsMu.Unlock()
-						}()
-					case "currentMatch":
-						doCurrentMatch = true
-						// Send current state. Definitely a hack but it works for now.
-						go func() {
-							c <- tracker.VictoryRule()
-							var ms MatchScores
-							ms.TeamA, ms.TeamB = tracker.CurrentTeams()
-							ms.ScoreA, ms.ScoreB = tracker.Scores()
-							c <- &ms
-						}()
-					case "famineTracker":
-						doFamineUpdates = true
-					case "tournamentData":
-						doTournamentData = true
-						go func() {
-							currTeamsMu.Lock()
-							c <- currPlayers
-							currTeamsMu.Unlock()
-						}()
-					}
 					continue
 				}
+				if e, ok := v.(*Event); ok {
+					cmd, ok := e.Data[ControlCommandKey].([]ControlCommand)
+					if e.Type == ControlEvent && ok && len(cmd) == 1 && cmd[0].Type == ClientStartRequest && cmd[0].Data.(ClientStartOptions).ClientIdentifier == &writeEnd {
+						for s := range cmd[0].Data.(ClientStartOptions).Sections {
+							switch s {
+							case "prediction":
+								doPredictions = true
+							case "control":
+								doControl = true
+							case "currentMatch":
+								doCurrentMatch = true
+							case "famineTracker":
+								doFamineUpdates = true
+							case "tournamentData":
+								doTournamentData = true
+							}
+						}
+					}
+				}
+
 				type dataPart struct {
 					Tag  string      `json:"tag"`
 					Data interface{} `json:"data,omitempty"`
@@ -1014,57 +1047,6 @@ func startWebServer(bindAddr string, eventStream EventStream) {
 							send(&p)
 						}
 					}
-
-				case MatchVictoryRule:
-					var tag string
-					if doControl {
-						p.Data.Section = "control"
-						tag = "matchSettings"
-					} else if doCurrentMatch {
-						p.Data.Section = "currentMatch"
-						tag = "settings"
-					} else {
-						continue
-					}
-					type ds struct {
-						VictoryRule struct {
-							Rule   string `json:"rule"`
-							Length int    `json:"length"`
-						} `json:"victoryRule"`
-					}
-					var d ds
-					switch vr := v.(type) {
-					case BestOfN:
-						d.VictoryRule.Rule = "BestOfN"
-						d.VictoryRule.Length = int(vr)
-					case StraightN:
-						d.VictoryRule.Rule = "StraightN"
-						d.VictoryRule.Length = int(vr)
-					}
-					p.Data.Parts = []dataPart{{Tag: tag, Data: d}}
-					send(&p)
-				case *MatchScores:
-					//!!!!: Race condition here, as the MatchScores are being updated in a different goroutine. So far it seems to have been fine but this should be fixed when redesigning.
-					var teamTag, scoreTag string
-					if doControl {
-						p.Data.Section = "control"
-						teamTag, scoreTag = "currentTeams", "currentScores"
-					} else if doCurrentMatch {
-						p.Data.Section = "currentMatch"
-						teamTag, scoreTag = "teams", "scores"
-					} else {
-						continue
-					}
-					// TODO: Currently assuming A is blue
-					t := make(map[string]interface{})
-					t["blue"] = v.TeamA
-					t["gold"] = v.TeamB
-					s := make(map[string]interface{})
-					s["blue"] = v.ScoreA
-					s["gold"] = v.ScoreB
-					p.Data.Parts = []dataPart{{Tag: teamTag, Data: t},
-						{Tag: scoreTag, Data: s}}
-					send(&p)
 
 				case teamList:
 					if !doControl {
