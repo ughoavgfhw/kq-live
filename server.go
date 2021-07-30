@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -56,6 +55,8 @@ const (
 	ScoreUpdateKey serverEventKey = iota
 	TeamUpdateKey
 	VictoryRuleKey
+	TeamListKey
+	PlayerDataKey
 )
 
 type ScoreUpdate struct {
@@ -83,6 +84,8 @@ const (
 	SetVictoryRule     // Data is MatchVictoryRule
 	SetCurrentTeams    // Data is TeamUpdate
 	SetScores          // Data is ScoreUpdate
+	SetTeamList        // Data is teamList
+	SetPlayerData      // Data is map[string][]playerData
 )
 
 type ClientStartOptions struct {
@@ -380,25 +383,21 @@ type playerData struct {
 	Scene    string `json:"scene,omitempty"`
 }
 
-var currTeamsMu sync.Mutex
-var currTeams teamList
-var currPlayers map[string][]playerData
-
-func watchTeamsFile(c chan<- interface{}) *FileWatcher {
+func watchTeamsFile(eventOutput EventStream) *FileWatcher {
 	return WatchFile("teams.conf", func(f *os.File) {
+		var teams teamList
+		var players = make(map[string][]playerData)
+		defer func() {
+			eventOutput.AddEvent(NewControlEvent([]ControlCommand{
+				{Type: SetTeamList, Data: teams},
+				{Type: SetPlayerData, Data: players},
+			}))
+		}()
 		if f == nil {
 			fmt.Println("No teams.conf file")
-			c <- teamList{}
-			c <- map[string][]playerData{}
-			currTeamsMu.Lock()
-			currTeams = currTeams[:0]
-			currPlayers = make(map[string][]playerData)
-			currTeamsMu.Unlock()
 			return
 		}
 		s := bufio.NewScanner(f)
-		var teams teamList
-		var players = make(map[string][]playerData)
 		var currTeamName string
 		for s.Scan() {
 			str := s.Text()
@@ -436,12 +435,6 @@ func watchTeamsFile(c chan<- interface{}) *FileWatcher {
 			return
 		}
 		fmt.Printf("Loaded %v teams\n", len(teams))
-		c <- teams
-		c <- players
-		currTeamsMu.Lock()
-		currTeams = teams
-		currPlayers = players
-		currTeamsMu.Unlock()
 	})
 }
 
@@ -586,6 +579,8 @@ func startWebServer(bindAddr string, eventStream EventStream) {
 	mixed := make(chan interface{})
 	tracker := startGameTracker()
 	go func() {
+		var currTeams teamList
+		var currPlayers map[string][]playerData
 		var e *Event
 		for e = eventStream.Next(); e != nil; e = eventStream.Next() {
 			switch e.Type {
@@ -615,6 +610,14 @@ func startWebServer(bindAddr string, eventStream EventStream) {
 						update := command.Data.(ScoreUpdate)
 						tracker.SetScores(update.Blue, update.Gold, e)
 
+					case SetTeamList:
+						currTeams = command.Data.(teamList)
+						e.Data[TeamListKey] = currTeams
+
+					case SetPlayerData:
+						currPlayers = command.Data.(map[string][]playerData)
+						e.Data[PlayerDataKey] = currPlayers
+
 					case ClientStartRequest:
 						sections := command.Data.(ClientStartOptions).Sections
 						// Attach current state.
@@ -626,26 +629,10 @@ func startWebServer(bindAddr string, eventStream EventStream) {
 							e.Data[ScoreUpdateKey] = ScoreUpdate{blueScore, goldScore}
 						}
 						if sections["control"] {
-							// Hack for current teams list
-							c := *command.Data.(ClientStartOptions).ClientIdentifier
-							go func() {
-								// Need to let the event get processed first, so that this doesn't get dropped.
-								time.Sleep(100 * time.Millisecond)
-								currTeamsMu.Lock()
-								c <- currTeams
-								currTeamsMu.Unlock()
-							}()
+							e.Data[TeamListKey] = currTeams
 						}
 						if sections["tournamentData"] {
-							// Hack for current player data
-							c := *command.Data.(ClientStartOptions).ClientIdentifier
-							go func() {
-								// Need to let the event get processed first, so that this doesn't get dropped.
-								time.Sleep(100 * time.Millisecond)
-								currTeamsMu.Lock()
-								c <- currPlayers
-								currTeamsMu.Unlock()
-							}()
+							e.Data[PlayerDataKey] = currPlayers
 						}
 					}
 				}
@@ -654,7 +641,7 @@ func startWebServer(bindAddr string, eventStream EventStream) {
 		}
 	}()
 
-	defer watchTeamsFile(mixed).Close()
+	defer watchTeamsFile(eventStream).Close()
 
 	reg := make(chan *chan<- interface{}, 1)
 	unreg := make(chan *chan<- interface{})
@@ -1024,6 +1011,9 @@ func startWebServer(bindAddr string, eventStream EventStream) {
 							s["gold"] = su.Gold
 							p.Data.Parts = append(p.Data.Parts, dataPart{Tag: "currentScores", Data: s})
 						}
+						if tl, ok := v.Data[TeamListKey].(teamList); ok {
+							p.Data.Parts = append(p.Data.Parts, dataPart{Tag: "teamList", Data: tl})
+						}
 						if len(p.Data.Parts) > 0 {
 							send(&p)
 						}
@@ -1066,21 +1056,15 @@ func startWebServer(bindAddr string, eventStream EventStream) {
 						}
 					}
 
-				case teamList:
-					if !doControl {
-						continue
+					if doTournamentData {
+						if pd, ok := v.Data[PlayerDataKey].(map[string][]playerData); ok {
+							p.Data.Section = "tournamentData"
+							p.Data.Parts = append(p.Data.Parts, dataPart{Tag: "teams", Data: pd})
+						}
+						if len(p.Data.Parts) > 0 {
+							send(&p)
+						}
 					}
-					p.Data.Section = "control"
-					p.Data.Parts = []dataPart{{Tag: "teamList", Data: v}}
-					send(&p)
-
-				case map[string][]playerData:
-					if !doTournamentData {
-						continue
-					}
-					p.Data.Section = "tournamentData"
-					p.Data.Parts = []dataPart{{Tag: "teams", Data: v}}
-					send(&p)
 				}
 			}
 		}()
