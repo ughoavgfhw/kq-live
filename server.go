@@ -89,16 +89,12 @@ const (
 )
 
 type ClientStartOptions struct {
-	ClientIdentifier *chan<- interface{} // The registration token.
+	ClientIdentifier *chan<- *Event // The registration token.
 	Sections         map[string]bool
 }
 
-func runRegistry(in <-chan interface{}, reg <-chan *chan<- interface{}, unreg <-chan *chan<- interface{}) {
-	singleRecipient := func(x interface{}) *chan<- interface{} {
-		e, ok := x.(*Event)
-		if !ok {
-			return nil
-		}
+func runRegistry(in <-chan *Event, reg <-chan *chan<- *Event, unreg <-chan *chan<- *Event) {
+	singleRecipient := func(e *Event) *chan<- *Event {
 		// Currently only client start request events have single recipients.
 		cmd, ok := e.Data[ControlCommandKey].([]ControlCommand)
 		if e.Type == ControlEvent && ok && len(cmd) == 1 && cmd[0].Type == ClientStartRequest {
@@ -107,24 +103,24 @@ func runRegistry(in <-chan interface{}, reg <-chan *chan<- interface{}, unreg <-
 		return nil
 	}
 
-	registry := make(map[*chan<- interface{}]struct{})
+	registry := make(map[*chan<- *Event]struct{})
 	for {
 		select {
 		case c := <-reg:
 			registry[c] = struct{}{}
 		case c := <-unreg:
 			delete(registry, c)
-		case x := <-in:
-			if r := singleRecipient(x); r == nil {
+		case e := <-in:
+			if r := singleRecipient(e); r == nil {
 				for c, _ := range registry {
 					select {
-					case *c <- x:
+					case *c <- e:
 					default: // Drop packets to a client instead of blocking the entire server
 					}
 				}
 			} else if _, ok := registry[r]; ok {
 				// This event should only be sent to a single recipient. It should not be dropped unless that recipient is unregistered.
-				*r <- x // Blocking
+				*r <- e // Blocking
 			}
 		}
 	}
@@ -438,7 +434,7 @@ func watchTeamsFile(eventOutput EventStream) *FileWatcher {
 	})
 }
 
-func handleWSIncoming(r io.Reader, registration *chan<- interface{}, eventOutput EventStream) {
+func handleWSIncoming(r io.Reader, registration *chan<- *Event, eventOutput EventStream) {
 	dec := json.NewDecoder(r)
 	dec.DisallowUnknownFields()
 	var tok json.Token
@@ -576,7 +572,7 @@ func handleWSIncoming(r io.Reader, registration *chan<- interface{}, eventOutput
 }
 
 func startWebServer(bindAddr string, eventStream EventStream) {
-	mixed := make(chan interface{})
+	outgoingEvents := make(chan *Event)
 	tracker := startGameTracker()
 	go func() {
 		var currTeams teamList
@@ -637,15 +633,15 @@ func startWebServer(bindAddr string, eventStream EventStream) {
 					}
 				}
 			}
-			mixed <- e
+			outgoingEvents <- e
 		}
 	}()
 
 	defer watchTeamsFile(eventStream).Close()
 
-	reg := make(chan *chan<- interface{}, 1)
-	unreg := make(chan *chan<- interface{})
-	go runRegistry(mixed, reg, unreg)
+	reg := make(chan *chan<- *Event, 1)
+	unreg := make(chan *chan<- *Event)
+	go runRegistry(outgoingEvents, reg, unreg)
 	http.Handle("/static/", http.FileServer(assets.FS))
 	http.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
 		var content http.File
@@ -774,16 +770,12 @@ func startWebServer(bindAddr string, eventStream EventStream) {
 				}
 			}
 		}()
-		c := make(chan interface{}, 256)
-		var writeEnd chan<- interface{} = c
+		c := make(chan *Event, 256)
+		var writeEnd chan<- *Event = c
 		reg <- &writeEnd
 		go func() {
 			var timeBuff []byte
-			for v := range c {
-				ev, ok := v.(*Event)
-				if !ok {
-					continue
-				}
+			for ev := range c {
 				if t, ok := ev.Data[GameStartTimeKey].(time.Time); ok {
 					w, e := conn.NextWriter(websocket.TextMessage)
 					if e != nil {
@@ -835,8 +827,8 @@ func startWebServer(bindAddr string, eventStream EventStream) {
 			return
 		}
 		shutdown := make(chan struct{})
-		c := make(chan interface{}, 256)
-		var writeEnd chan<- interface{} = c
+		c := make(chan *Event, 256)
+		var writeEnd chan<- *Event = c
 		reg <- &writeEnd
 		go func() {
 			for {
@@ -861,31 +853,28 @@ func startWebServer(bindAddr string, eventStream EventStream) {
 			doFamineUpdates := false
 			doTournamentData := false
 			for {
-				var v interface{}
+				var event *Event
 				select {
-				case v = <-c:
+				case event = <-c:
 				case _, ok := <-shutdown:
 					if !ok {
 						return
 					}
 					continue
 				}
-				if e, ok := v.(*Event); ok {
-					cmd, ok := e.Data[ControlCommandKey].([]ControlCommand)
-					if e.Type == ControlEvent && ok && len(cmd) == 1 && cmd[0].Type == ClientStartRequest && cmd[0].Data.(ClientStartOptions).ClientIdentifier == &writeEnd {
-						for s := range cmd[0].Data.(ClientStartOptions).Sections {
-							switch s {
-							case "prediction":
-								doPredictions = true
-							case "control":
-								doControl = true
-							case "currentMatch":
-								doCurrentMatch = true
-							case "famineTracker":
-								doFamineUpdates = true
-							case "tournamentData":
-								doTournamentData = true
-							}
+				if cmd, ok := event.Data[ControlCommandKey].([]ControlCommand); event.Type == ControlEvent && ok && len(cmd) == 1 && cmd[0].Type == ClientStartRequest && cmd[0].Data.(ClientStartOptions).ClientIdentifier == &writeEnd {
+					for s := range cmd[0].Data.(ClientStartOptions).Sections {
+						switch s {
+						case "prediction":
+							doPredictions = true
+						case "control":
+							doControl = true
+						case "currentMatch":
+							doCurrentMatch = true
+						case "famineTracker":
+							doFamineUpdates = true
+						case "tournamentData":
+							doTournamentData = true
 						}
 					}
 				}
@@ -924,146 +913,143 @@ func startWebServer(bindAddr string, eventStream EventStream) {
 					}
 				}
 				p := packet{Type: "data"}
-				switch v := v.(type) {
-				case *Event:
-					if doPredictions {
-						p.Data.Section = "prediction"
-						if t, ok := v.Data[GameStartTimeKey].(time.Time); ok {
-							timeBuff = t.AppendFormat(timeBuff[:0], time.RFC3339Nano)
-							p.Data.Parts = append(p.Data.Parts, dataPart{Tag: "reset", Data: string(timeBuff)})
-						}
-						if dp, ok := v.Data[StatsUpdateKey].(dataPoint); ok {
-							timeBuff = dp.when.AppendFormat(timeBuff[:0], time.RFC3339Nano)
-							d := make(map[string]interface{})
-							d["time"] = string(timeBuff)
-							if dp.event != "" {
-								d["event"] = dp.event
-							}
-							d["scores"] = dp.vals
-							s := make(map[string]interface{})
-							s["stats"] = dp.stats
-							s["status"] = dp.status
-							s["map"] = dp.mp
-							s["duration"] = dp.dur
-							if dp.winner != "" {
-								s["winner"] = dp.winner
-								s["winType"] = dp.winType
-							}
-							p.Data.Parts = append(p.Data.Parts,
-								dataPart{Tag: "next", Data: d},
-								dataPart{Tag: "stats", Data: s})
-						}
-						if len(p.Data.Parts) > 0 {
-							send(&p)
-						}
+				if doPredictions {
+					p.Data.Section = "prediction"
+					if t, ok := event.Data[GameStartTimeKey].(time.Time); ok {
+						timeBuff = t.AppendFormat(timeBuff[:0], time.RFC3339Nano)
+						p.Data.Parts = append(p.Data.Parts, dataPart{Tag: "reset", Data: string(timeBuff)})
 					}
-
-					if doFamineUpdates {
-						p.Data.Section = "famineTracker"
-						if fu, ok := v.Data[FamineUpdateKey].(FamineUpdate); ok {
-							d := map[string]interface{}{
-								"berriesLeft": fu.BerriesLeft,
-								"inFamine":    !fu.FamineStart.IsZero(),
-							}
-							if !fu.FamineStart.IsZero() {
-								dur := 90*time.Second - fu.CurrTime.Sub(fu.FamineStart)
-								if dur < 0 {
-									dur = 0
-								}
-								d["famineLeftSeconds"] = float64(dur) / float64(time.Second)
-							}
-							p.Data.Parts = append(p.Data.Parts, dataPart{Tag: "update", Data: d})
+					if dp, ok := event.Data[StatsUpdateKey].(dataPoint); ok {
+						timeBuff = dp.when.AppendFormat(timeBuff[:0], time.RFC3339Nano)
+						d := make(map[string]interface{})
+						d["time"] = string(timeBuff)
+						if dp.event != "" {
+							d["event"] = dp.event
 						}
-						if len(p.Data.Parts) > 0 {
-							send(&p)
+						d["scores"] = dp.vals
+						s := make(map[string]interface{})
+						s["stats"] = dp.stats
+						s["status"] = dp.status
+						s["map"] = dp.mp
+						s["duration"] = dp.dur
+						if dp.winner != "" {
+							s["winner"] = dp.winner
+							s["winType"] = dp.winType
 						}
+						p.Data.Parts = append(p.Data.Parts,
+							dataPart{Tag: "next", Data: d},
+							dataPart{Tag: "stats", Data: s})
 					}
-
-					if doControl {
-						p.Data.Section = "control"
-						if vr, ok := v.Data[VictoryRuleKey].(MatchVictoryRule); ok {
-							type ds struct {
-								VictoryRule struct {
-									Rule   string `json:"rule"`
-									Length int    `json:"length"`
-								} `json:"victoryRule"`
-							}
-							var d ds
-							switch vr := vr.(type) {
-							case BestOfN:
-								d.VictoryRule.Rule = "BestOfN"
-								d.VictoryRule.Length = int(vr)
-							case StraightN:
-								d.VictoryRule.Rule = "StraightN"
-								d.VictoryRule.Length = int(vr)
-							}
-							p.Data.Parts = []dataPart{{Tag: "matchSettings", Data: d}}
-						}
-						if tu, ok := v.Data[TeamUpdateKey].(TeamUpdate); ok {
-							t := make(map[string]interface{})
-							t["blue"] = tu.Blue
-							t["gold"] = tu.Gold
-							p.Data.Parts = append(p.Data.Parts, dataPart{Tag: "currentTeams", Data: t})
-						}
-						if su, ok := v.Data[ScoreUpdateKey].(ScoreUpdate); ok {
-							s := make(map[string]interface{})
-							s["blue"] = su.Blue
-							s["gold"] = su.Gold
-							p.Data.Parts = append(p.Data.Parts, dataPart{Tag: "currentScores", Data: s})
-						}
-						if tl, ok := v.Data[TeamListKey].(teamList); ok {
-							p.Data.Parts = append(p.Data.Parts, dataPart{Tag: "teamList", Data: tl})
-						}
-						if len(p.Data.Parts) > 0 {
-							send(&p)
-						}
+					if len(p.Data.Parts) > 0 {
+						send(&p)
 					}
+				}
 
-					if doCurrentMatch {
-						p.Data.Section = "currentMatch"
-						if vr, ok := v.Data[VictoryRuleKey].(MatchVictoryRule); ok {
-							type ds struct {
-								VictoryRule struct {
-									Rule   string `json:"rule"`
-									Length int    `json:"length"`
-								} `json:"victoryRule"`
+				if doFamineUpdates {
+					p.Data.Section = "famineTracker"
+					if fu, ok := event.Data[FamineUpdateKey].(FamineUpdate); ok {
+						d := map[string]interface{}{
+							"berriesLeft": fu.BerriesLeft,
+							"inFamine":    !fu.FamineStart.IsZero(),
+						}
+						if !fu.FamineStart.IsZero() {
+							dur := 90*time.Second - fu.CurrTime.Sub(fu.FamineStart)
+							if dur < 0 {
+								dur = 0
 							}
-							var d ds
-							switch vr := vr.(type) {
-							case BestOfN:
-								d.VictoryRule.Rule = "BestOfN"
-								d.VictoryRule.Length = int(vr)
-							case StraightN:
-								d.VictoryRule.Rule = "StraightN"
-								d.VictoryRule.Length = int(vr)
-							}
-							p.Data.Parts = []dataPart{{Tag: "settings", Data: d}}
+							d["famineLeftSeconds"] = float64(dur) / float64(time.Second)
 						}
-						if tu, ok := v.Data[TeamUpdateKey].(TeamUpdate); ok {
-							t := make(map[string]interface{})
-							t["blue"] = tu.Blue
-							t["gold"] = tu.Gold
-							p.Data.Parts = append(p.Data.Parts, dataPart{Tag: "teams", Data: t})
-						}
-						if su, ok := v.Data[ScoreUpdateKey].(ScoreUpdate); ok {
-							s := make(map[string]interface{})
-							s["blue"] = su.Blue
-							s["gold"] = su.Gold
-							p.Data.Parts = append(p.Data.Parts, dataPart{Tag: "scores", Data: s})
-						}
-						if len(p.Data.Parts) > 0 {
-							send(&p)
-						}
+						p.Data.Parts = append(p.Data.Parts, dataPart{Tag: "update", Data: d})
 					}
+					if len(p.Data.Parts) > 0 {
+						send(&p)
+					}
+				}
 
-					if doTournamentData {
-						if pd, ok := v.Data[PlayerDataKey].(map[string][]playerData); ok {
-							p.Data.Section = "tournamentData"
-							p.Data.Parts = append(p.Data.Parts, dataPart{Tag: "teams", Data: pd})
+				if doControl {
+					p.Data.Section = "control"
+					if vr, ok := event.Data[VictoryRuleKey].(MatchVictoryRule); ok {
+						type ds struct {
+							VictoryRule struct {
+								Rule   string `json:"rule"`
+								Length int    `json:"length"`
+							} `json:"victoryRule"`
 						}
-						if len(p.Data.Parts) > 0 {
-							send(&p)
+						var d ds
+						switch vr := vr.(type) {
+						case BestOfN:
+							d.VictoryRule.Rule = "BestOfN"
+							d.VictoryRule.Length = int(vr)
+						case StraightN:
+							d.VictoryRule.Rule = "StraightN"
+							d.VictoryRule.Length = int(vr)
 						}
+						p.Data.Parts = []dataPart{{Tag: "matchSettings", Data: d}}
+					}
+					if tu, ok := event.Data[TeamUpdateKey].(TeamUpdate); ok {
+						t := make(map[string]interface{})
+						t["blue"] = tu.Blue
+						t["gold"] = tu.Gold
+						p.Data.Parts = append(p.Data.Parts, dataPart{Tag: "currentTeams", Data: t})
+					}
+					if su, ok := event.Data[ScoreUpdateKey].(ScoreUpdate); ok {
+						s := make(map[string]interface{})
+						s["blue"] = su.Blue
+						s["gold"] = su.Gold
+						p.Data.Parts = append(p.Data.Parts, dataPart{Tag: "currentScores", Data: s})
+					}
+					if tl, ok := event.Data[TeamListKey].(teamList); ok {
+						p.Data.Parts = append(p.Data.Parts, dataPart{Tag: "teamList", Data: tl})
+					}
+					if len(p.Data.Parts) > 0 {
+						send(&p)
+					}
+				}
+
+				if doCurrentMatch {
+					p.Data.Section = "currentMatch"
+					if vr, ok := event.Data[VictoryRuleKey].(MatchVictoryRule); ok {
+						type ds struct {
+							VictoryRule struct {
+								Rule   string `json:"rule"`
+								Length int    `json:"length"`
+							} `json:"victoryRule"`
+						}
+						var d ds
+						switch vr := vr.(type) {
+						case BestOfN:
+							d.VictoryRule.Rule = "BestOfN"
+							d.VictoryRule.Length = int(vr)
+						case StraightN:
+							d.VictoryRule.Rule = "StraightN"
+							d.VictoryRule.Length = int(vr)
+						}
+						p.Data.Parts = []dataPart{{Tag: "settings", Data: d}}
+					}
+					if tu, ok := event.Data[TeamUpdateKey].(TeamUpdate); ok {
+						t := make(map[string]interface{})
+						t["blue"] = tu.Blue
+						t["gold"] = tu.Gold
+						p.Data.Parts = append(p.Data.Parts, dataPart{Tag: "teams", Data: t})
+					}
+					if su, ok := event.Data[ScoreUpdateKey].(ScoreUpdate); ok {
+						s := make(map[string]interface{})
+						s["blue"] = su.Blue
+						s["gold"] = su.Gold
+						p.Data.Parts = append(p.Data.Parts, dataPart{Tag: "scores", Data: s})
+					}
+					if len(p.Data.Parts) > 0 {
+						send(&p)
+					}
+				}
+
+				if doTournamentData {
+					if pd, ok := event.Data[PlayerDataKey].(map[string][]playerData); ok {
+						p.Data.Section = "tournamentData"
+						p.Data.Parts = append(p.Data.Parts, dataPart{Tag: "teams", Data: pd})
+					}
+					if len(p.Data.Parts) > 0 {
+						send(&p)
 					}
 				}
 			}
