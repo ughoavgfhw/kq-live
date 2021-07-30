@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"strings"
 	"time"
@@ -17,8 +16,6 @@ import (
 )
 
 var (
-	msgDump       = ioutil.Discard
-	snailDebug    = ioutil.Discard
 	logOut        = os.Stderr
 	predictionOut = os.Stdout
 	csvOut        io.Writer // Opened in main
@@ -220,18 +217,12 @@ func updateState(msg kqio.Message, game *kq.GameState) bool {
 		data := msg.Val.(parser.GetOnSnailMessage)
 		game.Players[data.Rider.Index()].OnSnail = 1
 		pos := data.Pos.X - game.Snails[0].MaxPos
-		if pos != game.Snails[0].Pos {
-			fmt.Fprintf(snailDebug, "%v: The snail moved from %v to %v without a rider\n",
-				msg.Time, game.Snails[0].Pos, pos)
-		}
 		// running drone speed 250 px/s. may be 1925ish pixels to wrap
 		// robot 200 px/s
 		// eat takes 3.5s, arantius vid says 3.67
 		if game.Players[data.Rider.Index()].HasSpeed {
-			fmt.Fprintln(snailDebug, "rider has speed")
 			snailSpeed = 28.209890875 // 27
 		} else {
-			fmt.Fprintln(snailDebug, "rider is slow")
 			snailSpeed = 20.896215463 // 20
 		}
 		if data.Rider.Team() == BlueSide {
@@ -245,13 +236,6 @@ func updateState(msg kqio.Message, game *kq.GameState) bool {
 		}
 		data := msg.Val.(parser.GetOffSnailMessage)
 		game.Players[data.Rider.Index()].OnSnail = 0
-		fmt.Fprintf(snailDebug, "Off: The snail moved by %v pixels in %v, %v px/s\n",
-			data.Pos.X-game.Snails[0].MaxPos-game.Snails[0].Pos,
-			msg.Time.Sub(snailTime),
-			float64(data.Pos.X-game.Snails[0].MaxPos-game.Snails[0].Pos)/
-				float64(msg.Time.Sub(snailTime)/time.Millisecond)*1000)
-		fmt.Fprintf(snailDebug, "Estimated snail position is %v, actual is %v, diff %v\n",
-			snailEstimate(msg.Time, game), data.Pos.X-game.Snails[0].MaxPos, data.Pos.X-game.Snails[0].MaxPos-snailEstimate(msg.Time, game))
 		game.Snails[0].Pos = data.Pos.X - game.Snails[0].MaxPos
 		snailTime = msg.Time
 		snailSpeed = 0
@@ -260,13 +244,6 @@ func updateState(msg kqio.Message, game *kq.GameState) bool {
 			return false
 		}
 		data := msg.Val.(parser.SnailStartEatMessage)
-		fmt.Fprintf(snailDebug, "Eat: The snail moved by %v pixels in %v, %v px/s\n",
-			data.Pos.X-game.Snails[0].MaxPos-game.Snails[0].Pos,
-			msg.Time.Sub(snailTime),
-			float64(data.Pos.X-game.Snails[0].MaxPos-game.Snails[0].Pos)/
-				float64(msg.Time.Sub(snailTime)/time.Millisecond)*1000)
-		fmt.Fprintf(snailDebug, "Estimated snail position is %v, actual is %v, diff %v\n",
-			snailEstimate(msg.Time, game), data.Pos.X-game.Snails[0].MaxPos, data.Pos.X-game.Snails[0].MaxPos-snailEstimate(msg.Time, game))
 		game.Snails[0].Pos = data.Pos.X - game.Snails[0].MaxPos
 		snailTime = msg.Time.Add(3500 * time.Millisecond)
 	case "snailEscape":
@@ -281,14 +258,10 @@ func updateState(msg kqio.Message, game *kq.GameState) bool {
 		} else {
 			offset = 50
 		}
+		// In theory, the snail shouldn't move while someone is sacrificing.
+		// In practice it can, either because it got pushed with a berry or
+		// because the sacrifice carried momentum into the snail.
 		pos := data.Pos.X - game.Snails[0].MaxPos + offset
-		if pos != game.Snails[0].Pos {
-			// In theory, the snail shouldn't move while someone is sacrificing.
-			// In practice it can, either because it got pushed with a berry or
-			// because the sacrifice carried momentum into the snail.
-			fmt.Fprintf(snailDebug, "%v: The snail moved from %v to %v during a sacrifice\n",
-				msg.Time, game.Snails[0].Pos, pos)
-		}
 		game.Snails[0].Pos = pos
 		snailTime = msg.Time
 	case "berryDeposit":
@@ -757,14 +730,22 @@ func updateStats(msg *kqio.Message, state *kq.GameState) {
 
 var configPath = flag.String("config", "config.json", "the path to the config file; it is not an error if this file does not exist")
 
+type mainEventKey int
+
+const (
+	GameStartTimeKey mainEventKey = iota
+	StatsUpdateKey
+)
+
 func main() {
 	flag.Parse()
 	config, e := ReadConfig(*configPath)
 	if e != nil && !os.IsNotExist(e) {
 		panic(fmt.Sprintf("Failed to load config %v", e))
 	}
-	broadcast := make(chan interface{})
-	go startWebServer(fmt.Sprintf(":%d", config.ServerPort), broadcast)
+	eventStream := NewEventStream()
+	defer eventStream.Close()
+	go startWebServer(fmt.Sprintf(":%d", config.ServerPort), eventStream)
 	<-time.After(5 * time.Second)
 	webStartTime, _ := time.Parse(time.RFC3339Nano, "2018-10-20T18:39:49.376-05:00")
 
@@ -799,7 +780,7 @@ func main() {
 	fmt.Fprintln(csvOut, CsvHeader)
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
-	famine := NewFamineTracker(broadcast)
+	famine := NewFamineTracker()
 	for {
 		var isTick bool
 		select {
@@ -811,18 +792,18 @@ func main() {
 
 		e = reader.ReadMessage(&msg)
 		if e != nil {
-			fmt.Fprintln(msgDump, "read error", e)
 			if e == io.EOF {
 				break
 			}
 			continue
 		}
-		fmt.Fprintln(msgDump, msg)
+
+		event := EventWithMessage(&msg, isTick)
 		updateStats(&msg, state)
 		if (updateState(msg, state) || isTick) && !state.Start.IsZero() && (state.InGame() || msg.Type == "victory") {
 			fmt.Fprintln(csvOut, &CsvPrinter{state.Map, msg.Time.Sub(state.Start), msg.Time, *state})
 			if msg.Type == "gamestart" {
-				broadcast <- msg.Time
+				event.Data[GameStartTimeKey] = msg.Time
 			} else if !msg.Time.Before(webStartTime) {
 				var dp dataPoint
 				dp.when = msg.Time
@@ -844,7 +825,7 @@ func main() {
 					dp.winner = msg.Val.(parser.GameResultMessage).Winner.String()
 					dp.winType = msg.Val.(parser.GameResultMessage).EndCondition.String()
 				}
-				broadcast <- dp
+				event.Data[StatsUpdateKey] = dp
 			}
 			if score != nil {
 				s := score(state, msg.Time)
@@ -861,7 +842,9 @@ func main() {
 		}
 
 		if state.InGame() {
-			famine.Update(msg.Time, state, isTick)
+			famine.Update(event, state)
 		}
+
+		eventStream.AddEvent(event)
 	}
 }

@@ -25,16 +25,16 @@ func DefaultConfig() *Config {
 }
 
 func ReadConfig(filepath string) (*Config, error) {
+	config := DefaultConfig()
 	f, err := os.Open(filepath)
 	if err != nil {
-		return nil, err
+		return config, err
 	}
 	defer f.Close()
 	d := json.NewDecoder(f)
-	config := DefaultConfig()
 	err = d.Decode(config)
 	overrideByFlags(config)
-	return config, nil
+	return config, err
 }
 
 var portFlag = flag.Int("port", 0, "the port number to listen on")

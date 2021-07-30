@@ -7,6 +7,10 @@ import (
 	"github.com/ughoavgfhw/libkq/maps"
 )
 
+type famineUpdateEventKey int
+
+var FamineUpdateKey famineUpdateEventKey
+
 type FamineUpdate struct {
 	BerriesLeft int
 	FamineStart time.Time
@@ -15,21 +19,20 @@ type FamineUpdate struct {
 
 type FamineTracker struct {
 	berryCount int
-	broadcast  chan<- interface{}
 }
 
-func NewFamineTracker(broadcast chan<- interface{}) *FamineTracker {
-	return &FamineTracker{0, broadcast}
+func NewFamineTracker() *FamineTracker {
+	return &FamineTracker{0}
 }
 
-func (ft *FamineTracker) Update(when time.Time, state *kq.GameState, isTick bool) {
+func (ft *FamineTracker) Update(event *Event, state *kq.GameState) {
 	mapData := maps.MetadataForMap(state.Map)
 	if mapData == nil {
 		return
 	}
 	berries := mapData.BerriesAvailable - state.BerriesUsed
-	if berries != ft.berryCount || (state.InFamine() && isTick) {
+	if berries != ft.berryCount || (state.InFamine() && event.IsTick) {
 		ft.berryCount = berries
-		ft.broadcast <- FamineUpdate{berries, state.FamineStart, when}
+		event.Data[FamineUpdateKey] = FamineUpdate{berries, state.FamineStart, event.When}
 	}
 }
