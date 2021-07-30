@@ -78,11 +78,11 @@ type ControlCommand struct {
 const (
 	InvalidControlCommand ControlCommandType = iota
 	// Note: ClientStartRequest must always be the only command in an event.
-	ClientStartRequest                       // Data is ClientStartOptions
-	AdvanceMatch                             // Data is nil
-	SetVictoryRule                           // Data is MatchVictoryRule
-	SetCurrentTeams                          // Data is TeamUpdate
-	SetScores                                // Data is ScoreUpdate
+	ClientStartRequest // Data is ClientStartOptions
+	AdvanceMatch       // Data is nil
+	SetVictoryRule     // Data is MatchVictoryRule
+	SetCurrentTeams    // Data is TeamUpdate
+	SetScores          // Data is ScoreUpdate
 )
 
 type ClientStartOptions struct {
@@ -91,6 +91,19 @@ type ClientStartOptions struct {
 }
 
 func runRegistry(in <-chan interface{}, reg <-chan *chan<- interface{}, unreg <-chan *chan<- interface{}) {
+	singleRecipient := func(x interface{}) *chan<- interface{} {
+		e, ok := x.(*Event)
+		if !ok {
+			return nil
+		}
+		// Currently only client start request events have single recipients.
+		cmd, ok := e.Data[ControlCommandKey].([]ControlCommand)
+		if e.Type == ControlEvent && ok && len(cmd) == 1 && cmd[0].Type == ClientStartRequest {
+			return cmd[0].Data.(ClientStartOptions).ClientIdentifier
+		}
+		return nil
+	}
+
 	registry := make(map[*chan<- interface{}]struct{})
 	for {
 		select {
@@ -99,11 +112,16 @@ func runRegistry(in <-chan interface{}, reg <-chan *chan<- interface{}, unreg <-
 		case c := <-unreg:
 			delete(registry, c)
 		case x := <-in:
-			for c, _ := range registry {
-				select {
-				case *c <- x:
-				default: // Drop packets to a client instead of blocking the entire server
+			if r := singleRecipient(x); r == nil {
+				for c, _ := range registry {
+					select {
+					case *c <- x:
+					default: // Drop packets to a client instead of blocking the entire server
+					}
 				}
+			} else if _, ok := registry[r]; ok {
+				// This event should only be sent to a single recipient. It should not be dropped unless that recipient is unregistered.
+				*r <- x // Blocking
 			}
 		}
 	}
